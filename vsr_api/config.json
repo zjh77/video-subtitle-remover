@@ -1,0 +1,9 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8020
+  },
+  "storage": {
+    "data_root": "E:\\short\\tools\\vsr-data"
+  }
+}
