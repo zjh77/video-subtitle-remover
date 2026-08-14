@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ class WorkerRuntime:
 
     def preflight(self) -> dict[str, Any]:
         self.state.initialize()
+        self._sweep_terminal_attempts()
         if available_bytes(self.settings.runtime.state_dir) < self.settings.runtime.min_free_bytes:
             raise RuntimeError("worker state disk space is below its configured minimum")
         health = self.local_vsr.health()
@@ -117,6 +119,10 @@ class WorkerRuntime:
             if job.get("status") == "cancelled":
                 self.relay.cancel_task(claim)
                 self.state.update(claim.task_id, claim.attempt_id, status="cancelled")
+                if input_asset_id:
+                    self._delete_local_asset(input_asset_id)
+                if output_asset_id:
+                    self._delete_local_asset(output_asset_id)
                 self._cleanup_attempt(claim.task_id, claim.attempt_id, remove_state=True)
                 return
             if job.get("status") != "succeeded":
@@ -139,11 +145,13 @@ class WorkerRuntime:
                 self._delete_local_asset(input_asset_id)
             if output_asset_id:
                 self._delete_local_asset(output_asset_id)
+            self._cleanup_attempt(claim.task_id, claim.attempt_id, remove_state=False, retain_diagnostics=True)
             self._cleanup_attempt(claim.task_id, claim.attempt_id, remove_state=True)
         except LeaseLostError:
             # A fenced-out worker must never report success.  Local files are retained
             # only until the normal failed-attempt sweep can remove diagnostics.
             self.state.update(claim.task_id, claim.attempt_id, status="lease_lost")
+            self._write_diagnostic(claim, "Lease lost; terminal report was fenced out.")
             if input_asset_id:
                 self._delete_local_asset(input_asset_id)
             if output_asset_id:
@@ -165,7 +173,8 @@ class WorkerRuntime:
                 self._delete_local_asset(input_asset_id)
             if output_asset_id:
                 self._delete_local_asset(output_asset_id)
-            self._cleanup_attempt(claim.task_id, claim.attempt_id, remove_state=False)
+            self._write_diagnostic(claim, f"Task failed: {message}")
+            self._cleanup_attempt(claim.task_id, claim.attempt_id, remove_state=False, retain_diagnostics=True)
 
     def _wait_for_local_job(self, claim: ClaimedTask, controller: "_LeaseController", job_id: str) -> dict[str, Any]:
         after = 0
@@ -205,11 +214,25 @@ class WorkerRuntime:
         directory.mkdir(parents=True, exist_ok=True)
         return directory
 
-    def _cleanup_attempt(self, task_id: str, attempt_id: str, remove_state: bool) -> None:
+    def _cleanup_attempt(self, task_id: str, attempt_id: str, remove_state: bool, retain_diagnostics: bool = False) -> None:
         directory = self.settings.runtime.state_dir / "tasks" / "".join(ch for ch in task_id if ch.isalnum() or ch in "-_") / "".join(ch for ch in attempt_id if ch.isalnum() or ch in "-_")
-        shutil.rmtree(directory, ignore_errors=True)
+        if retain_diagnostics:
+            for pattern in ("*.mp4", "*.part"):
+                for item in directory.glob(pattern):
+                    item.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(directory, ignore_errors=True)
         if remove_state:
             self.state.remove(task_id, attempt_id)
+
+    def _write_diagnostic(self, claim: ClaimedTask, message: str) -> None:
+        with (self._work_dir(claim) / "diagnostic.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"{datetime.now(timezone.utc).isoformat()} {redact_text(message)}\n")
+
+    def _sweep_terminal_attempts(self) -> None:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        for record in self.state.terminal_before(cutoff):
+            self._cleanup_attempt(record.task_id, record.attempt_id, remove_state=True)
 
     def _delete_local_asset(self, asset_id: str) -> None:
         try:
