@@ -22,7 +22,9 @@ class AttemptRecord:
     input_size_bytes: int
     input_sha256: str
     cleanup_json: str
+    local_input_asset_id: str | None
     local_vsr_job_id: str | None
+    local_output_asset_id: str | None
     log_sequence: int
     upload_id: str | None
     upload_part_size: int | None
@@ -60,7 +62,9 @@ class WorkerState:
                     input_size_bytes INTEGER NOT NULL,
                     input_sha256 TEXT NOT NULL,
                     cleanup_json TEXT NOT NULL,
+                    local_input_asset_id TEXT,
                     local_vsr_job_id TEXT,
+                    local_output_asset_id TEXT,
                     log_sequence INTEGER NOT NULL DEFAULT 0,
                     upload_id TEXT,
                     upload_part_size INTEGER,
@@ -76,13 +80,22 @@ class WorkerState:
                 );
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(attempts)")}
+            if "local_input_asset_id" not in columns:
+                connection.execute("ALTER TABLE attempts ADD COLUMN local_input_asset_id TEXT")
+            if "local_output_asset_id" not in columns:
+                connection.execute("ALTER TABLE attempts ADD COLUMN local_output_asset_id TEXT")
 
     def save_claim(self, claim: Any) -> None:
         """Persist only durable metadata; signed URLs are intentionally excluded."""
         cleanup = {"subtitle_areas": claim.cleanup.subtitle_areas, "inpaint_mode": claim.cleanup.inpaint_mode}
         with self._connection() as connection:
             connection.execute(
-                """INSERT INTO attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """INSERT INTO attempts (
+                    task_id,attempt_id,lease_token,lease_expires_at,status,input_asset_id,input_filename,
+                    input_size_bytes,input_sha256,cleanup_json,local_input_asset_id,local_vsr_job_id,
+                    local_output_asset_id,log_sequence,upload_id,upload_part_size
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(task_id,attempt_id) DO UPDATE SET
                   lease_token=excluded.lease_token, lease_expires_at=excluded.lease_expires_at,
                   status=excluded.status, input_asset_id=excluded.input_asset_id,
@@ -91,7 +104,7 @@ class WorkerState:
                 (
                     claim.task_id, claim.attempt_id, claim.lease_token, claim.lease_expires_at, "claimed",
                     claim.input_asset.asset_id, claim.input_asset.filename, claim.input_asset.size_bytes,
-                    claim.input_asset.sha256, json.dumps(cleanup, separators=(",", ":")), None, 0, None, None,
+                    claim.input_asset.sha256, json.dumps(cleanup, separators=(",", ":")), None, None, None, 0, None, None,
                 ),
             )
 
@@ -106,7 +119,7 @@ class WorkerState:
         return [AttemptRecord(**dict(row)) for row in rows]
 
     def update(self, task_id: str, attempt_id: str, **values: Any) -> None:
-        allowed = {"lease_token", "lease_expires_at", "status", "local_vsr_job_id", "log_sequence", "upload_id", "upload_part_size"}
+        allowed = {"lease_token", "lease_expires_at", "status", "local_input_asset_id", "local_vsr_job_id", "local_output_asset_id", "log_sequence", "upload_id", "upload_part_size"}
         unknown = set(values) - allowed
         if unknown:
             raise ValueError("invalid local attempt state update")

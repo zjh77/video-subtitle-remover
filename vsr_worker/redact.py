@@ -14,12 +14,14 @@ _SENSITIVE_KEY = re.compile(
 )
 _BEARER = re.compile(r"(?i)bearer\s+[^\s,;]+")
 _URL = re.compile(r"https?://[^\s\"']+")
+_WINDOWS_PATH = re.compile(r"(?i)(?:[a-z]:[\\/])[^\s\"']+")
 
 
 def redact_text(value: object) -> str:
     """Return a string suitable for logs without credentials or URL queries."""
     text = str(value)
     text = _BEARER.sub("Bearer [REDACTED]", text)
+    text = _WINDOWS_PATH.sub("[LOCAL_PATH]", text)
 
     def replace_url(match: re.Match[str]) -> str:
         parts = urlsplit(match.group(0))
