@@ -106,6 +106,15 @@ class LocalVsrClient:
             conn.close()
             raise LocalVsrError("could not download local VSR output") from exc
 
+    def download_output(self, asset_id: str, destination: Path) -> None:
+        response = self.open_output(asset_id, 0)
+        try:
+            with destination.open("wb") as handle:
+                while chunk := response.read(1024 * 1024):
+                    handle.write(chunk)
+        finally:
+            response.close()
+
     def delete_asset(self, asset_id: str) -> None:
         self._json("DELETE", f"/api/v1/assets/{quote(asset_id, safe='')}")
 
