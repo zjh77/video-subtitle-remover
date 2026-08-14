@@ -349,6 +349,24 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/intellij+all,python,pycharm+all,macos,windows
+
+# Local VSR relay runtime state and secrets.  Only *.example files may be committed.
+/vsr_worker/config.json
+/vsr_worker/*.local.json
+/vsr_worker/worker_data/
+/vsr_worker/*.db
+/vsr_worker/*.log
+/vsr_api/config.json
+/vsr_api/data/
+/.tmp-*
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.token
 /backend/models/V2/ch_rec/inference.pdiparams
 /backend/models/V4/ch_det/inference.pdiparams
 /backend/models/big-lama/models/best.ckpt

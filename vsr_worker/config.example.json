@@ -1,0 +1,19 @@
+{
+  "relay": {
+    "base_url": "",
+    "ca_file": "",
+    "worker_id": "",
+    "token_file": ""
+  },
+  "local_vsr": {
+    "base_url": "http://127.0.0.1:8020"
+  },
+  "runtime": {
+    "state_dir": "",
+    "min_free_bytes": 2147483648,
+    "heartbeat_seconds": 20,
+    "claim_timeout_seconds": 45,
+    "lease_seconds": 90,
+    "lease_renew_seconds": 20
+  }
+}

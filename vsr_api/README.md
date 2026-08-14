@@ -4,16 +4,16 @@
 
 ## Start
 
-Use the same Python environment that has this repository's VSR dependencies installed:
+Use a Python environment that has this repository's VSR dependencies installed:
 
 ```powershell
-E:\short\venv\vse\python.exe -m pip install -r vsr_api\requirements.txt
-E:\short\venv\vse\python.exe -m vsr_api.run
+python -m pip install -r vsr_api\requirements.txt
+python -m vsr_api.run
 ```
 
-The default address is `http://127.0.0.1:8020`; interactive OpenAPI documentation is at `/docs`.
+The default address is `http://127.0.0.1:8020`; interactive OpenAPI documentation is at `/docs`. Do not expose this service publicly. The relay Worker accesses it only through localhost.
 
-`vsr_api/config.json` controls the listening address and data directory. Set `VSR_API_DATA_ROOT` to override the data directory for a process without changing the file.
+Copy `vsr_api/config.example.json` to the ignored local file `vsr_api/config.json` only when file-based configuration is required. `VSR_API_HOST`, `VSR_API_PORT`, and `VSR_API_DATA_ROOT` override it. Do not place real deployment paths or credentials in this repository.
 
 ## Storage and lifecycle
 
