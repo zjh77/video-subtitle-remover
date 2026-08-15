@@ -26,6 +26,11 @@ class RelayClient:
   return HeartbeatResult(frozenset(str(i["attempt_id"]) for i in x if isinstance(i,dict) and i.get("attempt_id")))
  def claim(self,wait):
   status,v=self._json_status("POST",f"/workers/{self._worker()}/leases:claim",{"max_jobs":1,"wait_seconds":wait},wait+10,True); return None if status==204 else ClaimedLease.from_response(v)
+ def recover_lease(self,lease_id):
+  try:return ClaimedLease.from_response(self._json("GET",f"/worker-leases/{quote(lease_id,safe='')}"))
+  except RelayError as exc:
+   if "HTTP 404" in str(exc):raise LeaseLostError("relay recovery lease is unavailable") from exc
+   raise
  def renew_lease(self,c):
   v=self._json("POST",self._lease(c)+"/renew"); return str(v["lease_expires_at"]),bool(v["cancel_requested"])
  def report_progress(self,c,p,message): self._json("POST",self._lease(c)+"/progress",{"progress_percent":max(0,min(100,round(p or 0))),"message":message[:500]})

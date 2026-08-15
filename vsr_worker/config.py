@@ -119,6 +119,8 @@ def load_settings() -> WorkerSettings:
         raise ConfigError("VSR_RELAY_LOCAL_VSR_URL must be an HTTP loopback origin")
 
     heartbeat = _positive_int(_setting(data, "VSR_RELAY_HEARTBEAT_SECONDS", "runtime", "heartbeat_seconds", 20), "heartbeat_seconds", 15)
+    if heartbeat > 20:
+        raise ConfigError("heartbeat_seconds must not exceed 20")
     lease = _positive_int(_setting(data, "VSR_RELAY_LEASE_SECONDS", "runtime", "lease_seconds", 90), "lease_seconds", 45)
     renew = _positive_int(_setting(data, "VSR_RELAY_LEASE_RENEW_SECONDS", "runtime", "lease_renew_seconds", 20), "lease_renew_seconds", 10)
     if renew >= lease:
@@ -128,9 +130,11 @@ def load_settings() -> WorkerSettings:
         state_dir=state_dir,
         min_free_bytes=_positive_int(_setting(data, "VSR_RELAY_MIN_FREE_BYTES", "runtime", "min_free_bytes", 2147483648), "min_free_bytes", 0),
         heartbeat_seconds=heartbeat,
-        claim_timeout_seconds=_positive_int(_setting(data, "VSR_RELAY_CLAIM_TIMEOUT_SECONDS", "runtime", "claim_timeout_seconds", 45), "claim_timeout_seconds", 20),
+        claim_timeout_seconds=_positive_int(_setting(data, "VSR_RELAY_CLAIM_TIMEOUT_SECONDS", "runtime", "claim_timeout_seconds", 20), "claim_timeout_seconds", 1),
         lease_seconds=lease,
         lease_renew_seconds=renew,
         local_vsr_base_url=local_vsr,
     )
+    if runtime.claim_timeout_seconds > 25:
+        raise ConfigError("claim_timeout_seconds must not exceed 25")
     return WorkerSettings(RelaySettings(base_url, ca_file, worker_id, _read_token(data)), runtime)

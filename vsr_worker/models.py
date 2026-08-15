@@ -38,11 +38,12 @@ class ClaimedLease:
     lease_expires_at: str
     input_artifact: InputArtifact
     cleanup: SubtitleCleanupOptions
+    cancel_requested: bool = False
     @classmethod
     def from_response(cls, value: dict[str, Any]) -> "ClaimedLease":
         try:
             source = value["input"]
-            result = cls(str(value["lease_id"]), str(value["job_id"]), int(value["attempt"]), str(value["lease_expires_at"]), InputArtifact(str(source["artifact_id"]), int(source["size_bytes"]), str(source["sha256"]), str(source["download_url"])), SubtitleCleanupOptions.from_operation(value["operation"]))
+            result = cls(str(value["lease_id"]), str(value["job_id"]), int(value["attempt"]), str(value["lease_expires_at"]), InputArtifact(str(source["artifact_id"]), int(source["size_bytes"]), str(source["sha256"]), str(source["download_url"])), SubtitleCleanupOptions.from_operation(value["operation"]), bool(value.get("cancel_requested", False)))
         except (KeyError, TypeError, ValueError) as exc: raise ContractError("lease claim response is invalid") from exc
         if not result.lease_id or not result.job_id or result.attempt < 1 or result.input_artifact.size_bytes <= 0: raise ContractError("lease claim response is invalid")
         return result

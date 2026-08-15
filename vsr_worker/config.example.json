@@ -12,7 +12,7 @@
     "state_dir": "",
     "min_free_bytes": 2147483648,
     "heartbeat_seconds": 20,
-    "claim_timeout_seconds": 45,
+    "claim_timeout_seconds": 20,
     "lease_seconds": 90,
     "lease_renew_seconds": 20
   }

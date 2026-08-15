@@ -24,6 +24,13 @@ python -m vsr_worker
 
 The Worker checks its private CA file, token, state disk capacity, and local VSR `/health` before it registers or claims a task.
 
+On restart it first calls the task center's lease-recovery endpoint for every
+non-terminal SQLite record. A valid lease resumes its persisted local VSR job;
+the fresh response supplies a replacement input download URL. A rejected lease
+is fenced, its local media is removed, and the Worker never creates another
+VSR job for that attempt. A `cancel_requested` recovery response cancels the
+persisted local job before reporting it cancelled.
+
 ## Security rules
 
 - Do not put runtime configuration, CA files, private keys, tokens, task-center addresses, signed URLs, or videos in this repository.
