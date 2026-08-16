@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 
-rem Start the loopback-only VSR API from this repository, using Conda env "vsr".
+rem Start the loopback-only VSR API from this repository, using the VSR Conda environment.
 rem Pre-set VSR_API_HOST, VSR_API_PORT, or VSR_API_DATA_ROOT to override defaults.
 set "PROJECT_ROOT=%~dp0.."
 pushd "%PROJECT_ROOT%" >nul || (
@@ -16,16 +16,16 @@ if errorlevel 1 (
   exit /b 1
 )
 
-call conda activate vsr
+call conda activate D:\conda_envs\vsr
 if errorlevel 1 (
-  echo ERROR: Could not activate the Conda environment named "vsr".
+  echo ERROR: Could not activate the Conda environment at D:\conda_envs\vsr.
   popd
   exit /b 1
 )
 
 where python >nul 2>&1
 if errorlevel 1 (
-  echo ERROR: Python is unavailable after activating the "vsr" environment.
+  echo ERROR: Python is unavailable after activating the VSR Conda environment.
   popd
   exit /b 1
 )
