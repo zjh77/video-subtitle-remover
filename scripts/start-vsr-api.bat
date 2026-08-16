@@ -32,7 +32,7 @@ if errorlevel 1 (
 
 if not defined VSR_API_HOST set "VSR_API_HOST=127.0.0.1"
 if not defined VSR_API_PORT set "VSR_API_PORT=8020"
-if not defined VSR_API_DATA_ROOT set "VSR_API_DATA_ROOT=D:\short\data"
+if not defined VSR_API_DATA_ROOT set "VSR_API_DATA_ROOT=D:\short\vsr-data"
 
 echo Starting VSR API on %VSR_API_HOST%:%VSR_API_PORT% ...
 python -m vsr_api.run
