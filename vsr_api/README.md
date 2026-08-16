@@ -16,6 +16,10 @@ project root using the Conda environment at `D:\conda_envs\vsr`; pre-set `VSR_AP
 `VSR_API_PORT`, or `VSR_API_DATA_ROOT` only when overriding its safe defaults
 (including the default data root `D:\short\vsr-data`).
 
+For relay deployments, `scripts\start-vsr-relay.bat` starts or reuses the
+loopback VSR API, waits for `/health`, then starts the Worker using the ignored
+`private\vsr-worker.json` configuration file.
+
 The default address is `http://127.0.0.1:8020`; interactive OpenAPI documentation is at `/docs`. Do not expose this service publicly. The relay Worker accesses it only through localhost.
 
 Copy `vsr_api/config.example.json` to the ignored local file `vsr_api/config.json` only when file-based configuration is required. `VSR_API_HOST`, `VSR_API_PORT`, and `VSR_API_DATA_ROOT` override it. Do not place real deployment paths or credentials in this repository.
