@@ -1,4 +1,5 @@
 import hashlib
+import json
 import shutil
 import unittest
 from io import BytesIO
@@ -6,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from vsr_worker.models import ClaimedLease
+from vsr_worker.observability import JsonlAuditLogger
 from vsr_worker.relay_client import LeaseLostError
 from vsr_worker.runtime import WorkerRuntime
 from vsr_worker.state import WorkerState
@@ -13,7 +15,7 @@ from vsr_worker.transfer import download_with_resume, upload_output_with_resume
 
 
 def lease(cancel_requested=False):
-    return ClaimedLease.from_response({"lease_id":"att_1","job_id":"vcj_1","attempt":1,"lease_expires_at":"future","cancel_requested":cancel_requested,"operation":{"type":"subtitle_cleanup","options":{"subtitle_areas":[{"ymin":0,"ymax":1,"xmin":0,"xmax":1}],"inpaint_mode":"opencv"}},"input":{"artifact_id":"art_1","size_bytes":3,"sha256":hashlib.sha256(b"abc").hexdigest(),"download_url":"/api/v1/artifacts/art_1/download?token=secret"}})
+    return ClaimedLease.from_response({"lease_id":"att_1","job_id":"vcj_1","attempt":1,"lease_expires_at":"future","cancel_requested":cancel_requested,"trace_id":"trace_1","client_request_id":"request_1","operation":{"type":"subtitle_cleanup","options":{"subtitle_areas":[{"ymin":0,"ymax":1,"xmin":0,"xmax":1}],"inpaint_mode":"opencv"}},"input":{"artifact_id":"art_1","size_bytes":3,"sha256":hashlib.sha256(b"abc").hexdigest(),"download_url":"/api/v1/artifacts/art_1/download?token=secret"}})
 
 
 class Response:
@@ -83,6 +85,9 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(runtime.relay.completed); self.assertEqual(state.get("att_1").status,"succeeded")
             self.assertEqual(runtime.local_vsr.created,1); self.assertFalse((root/"tasks"/"vcj_1"/"att_1").exists())
             self.assertGreaterEqual(runtime.relay.heartbeats,1)
+            lines=[json.loads(line) for line in (root/"logs"/"worker.jsonl").read_text(encoding="utf-8").splitlines()]
+            completed=next(line for line in lines if line["event"]=="task_completed")
+            self.assertEqual(completed["trace_id"],"trace_1"); self.assertEqual(completed["client_request_id"],"request_1")
         finally: shutil.rmtree(root,ignore_errors=True)
     def test_runtime_cancel_stops_upload_and_reports_cancelled(self):
         root,state,runtime=self.setup_runtime(FakeRelay(cancel_on_renew=True))
@@ -125,6 +130,16 @@ class WorkerTests(unittest.TestCase):
             runtime.recover_unfinished()
             self.assertEqual(state.get("att_1").status,"lease_lost"); self.assertEqual(runtime.local_vsr.created,0)
             self.assertFalse(runtime.relay.completed); self.assertFalse((root/"tasks"/"vcj_1"/"att_1").exists())
+        finally: shutil.rmtree(root,ignore_errors=True)
+    def test_jsonl_logger_redacts_sensitive_values(self):
+        root=self.runtime_dir()
+        try:
+            logger=JsonlAuditLogger(root/"audit",1024,1)
+            logger.emit("INFO","request",authorization="Bearer token-value",download_url="https://example.invalid/file?signature=secret",path="C:\\sensitive\\video.mp4",unix_path="/private/video.mp4",message="ok")
+            text=(root/"audit"/"worker.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"event":"request"',text); self.assertIn('[REDACTED]',text); self.assertIn('[LOCAL_PATH]',text)
+            self.assertNotIn("token-value",text); self.assertNotIn("signature=secret",text); self.assertNotIn("sensitive\\video",text)
+            self.assertNotIn("private/video",text)
         finally: shutil.rmtree(root,ignore_errors=True)
 
 if __name__=="__main__": unittest.main()

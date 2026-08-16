@@ -15,6 +15,7 @@ _SENSITIVE_KEY = re.compile(
 _BEARER = re.compile(r"(?i)bearer\s+[^\s,;]+")
 _URL = re.compile(r"https?://[^\s\"']+")
 _WINDOWS_PATH = re.compile(r"(?i)(?:[a-z]:[\\/])[^\s\"']+")
+_UNIX_PATH = re.compile(r"(?<![:\w])/(?:[^\s\"']+)")
 
 
 def redact_text(value: object) -> str:
@@ -28,7 +29,8 @@ def redact_text(value: object) -> str:
         # Query parameters are where signed object URLs normally carry secrets.
         return urlunsplit((parts.scheme, parts.netloc, parts.path, "[REDACTED]" if parts.query else "", ""))
 
-    return _URL.sub(replace_url, text)
+    text = _URL.sub(replace_url, text)
+    return _UNIX_PATH.sub("[LOCAL_PATH]", text)
 
 
 def redact_mapping(value: Mapping[str, Any]) -> dict[str, Any]:

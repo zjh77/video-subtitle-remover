@@ -39,14 +39,23 @@ class ClaimedLease:
     input_artifact: InputArtifact
     cleanup: SubtitleCleanupOptions
     cancel_requested: bool = False
+    trace_id: str | None = None
+    client_request_id: str | None = None
     @classmethod
     def from_response(cls, value: dict[str, Any]) -> "ClaimedLease":
         try:
             source = value["input"]
-            result = cls(str(value["lease_id"]), str(value["job_id"]), int(value["attempt"]), str(value["lease_expires_at"]), InputArtifact(str(source["artifact_id"]), int(source["size_bytes"]), str(source["sha256"]), str(source["download_url"])), SubtitleCleanupOptions.from_operation(value["operation"]), bool(value.get("cancel_requested", False)))
+            job = value.get("job", {})
+            if not isinstance(job, dict): job = {}
+            result = cls(str(value["lease_id"]), str(value["job_id"]), int(value["attempt"]), str(value["lease_expires_at"]), InputArtifact(str(source["artifact_id"]), int(source["size_bytes"]), str(source["sha256"]), str(source["download_url"])), SubtitleCleanupOptions.from_operation(value["operation"]), bool(value.get("cancel_requested", False)), _optional_id(value.get("trace_id", job.get("trace_id"))), _optional_id(value.get("client_request_id", job.get("client_request_id"))))
         except (KeyError, TypeError, ValueError) as exc: raise ContractError("lease claim response is invalid") from exc
         if not result.lease_id or not result.job_id or result.attempt < 1 or result.input_artifact.size_bytes <= 0: raise ContractError("lease claim response is invalid")
         return result
+
+def _optional_id(value: Any) -> str | None:
+    if value is None: return None
+    if not isinstance(value, str) or not value.strip() or len(value) > 256: raise ContractError("lease correlation ID is invalid")
+    return value.strip()
 
 @dataclass(frozen=True)
 class UploadSession:

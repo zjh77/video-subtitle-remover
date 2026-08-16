@@ -81,6 +81,9 @@ class RuntimeSettings:
     lease_seconds: int
     lease_renew_seconds: int
     local_vsr_base_url: str
+    log_dir: Path | None
+    log_max_bytes: int
+    log_backup_count: int
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,9 @@ def load_settings() -> WorkerSettings:
         lease_seconds=lease,
         lease_renew_seconds=renew,
         local_vsr_base_url=local_vsr,
+        log_dir=Path(str(_setting(data, "VSR_RELAY_LOG_DIR", "observability", "log_dir")).strip()).expanduser() if str(_setting(data, "VSR_RELAY_LOG_DIR", "observability", "log_dir")).strip() else None,
+        log_max_bytes=_positive_int(_setting(data, "VSR_RELAY_LOG_MAX_BYTES", "observability", "log_max_bytes", 10485760), "log_max_bytes"),
+        log_backup_count=_positive_int(_setting(data, "VSR_RELAY_LOG_BACKUP_COUNT", "observability", "log_backup_count", 7), "log_backup_count", 1),
     )
     if runtime.claim_timeout_seconds > 25:
         raise ConfigError("claim_timeout_seconds must not exceed 25")

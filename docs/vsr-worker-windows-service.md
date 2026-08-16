@@ -45,4 +45,7 @@ Install and start with the WinSW executable stored beside this ignored local XML
 - Worker Token is a high-entropy secret, stored in an ACL-protected file or OS secret store.
 - Private CA and token rotation are performed out of band; both old and new trust material may overlap during a planned rotation.
 - Never pass Token values on command lines, in service display names or in logs.
+- Worker JSONL audit logs are independent from WinSW stdout/stderr rotation.
+  Keep the Worker state/log directory ACL-protected and use `job_id` or
+  `trace_id` to correlate them with the task-center event stream.
 - Nginx IP rules may add rate limiting or block known malicious sources, but must not require a fixed Worker or Workbench egress IP.

@@ -24,6 +24,24 @@ python -m vsr_worker
 
 The Worker checks its private CA file, token, state disk capacity, and local VSR `/health` before it registers or claims a task.
 
+## Observability logs
+
+The Worker writes redacted, rotating JSONL audit logs to `logs/worker.jsonl`
+under its state directory by default. Set `VSR_RELAY_LOG_DIR` (or
+`observability.log_dir` in protected local configuration) to choose another
+protected local directory. `VSR_RELAY_LOG_MAX_BYTES` defaults to 10 MiB and
+`VSR_RELAY_LOG_BACKUP_COUNT` defaults to 7.
+
+Each record has `timestamp`, `level`, and `event`; lease-scoped records also
+include `job_id`, `lease_id`, `attempt`, and, when provided by the task center,
+`trace_id` and `client_request_id`. Search by `job_id` or `trace_id` first,
+then use the persisted local VSR job ID in the Worker SQLite state to retrieve
+the local VSR API status and logs.
+
+Log records redact bearer credentials, sensitive mapping keys, URL query
+strings, and absolute Windows or Unix paths. Do not add raw request bodies,
+headers, runtime configuration, or exception tracebacks to audit events.
+
 On restart it first calls the task center's lease-recovery endpoint for every
 non-terminal SQLite record. A valid lease resumes its persisted local VSR job;
 the fresh response supplies a replacement input download URL. A rejected lease

@@ -15,5 +15,10 @@
     "claim_timeout_seconds": 20,
     "lease_seconds": 90,
     "lease_renew_seconds": 20
+  },
+  "observability": {
+    "log_dir": "",
+    "log_max_bytes": 10485760,
+    "log_backup_count": 7
   }
 }

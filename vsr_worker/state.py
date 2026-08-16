@@ -9,7 +9,7 @@ from typing import Any, Iterator
 
 @dataclass(frozen=True)
 class LeaseRecord:
-    job_id: str; lease_id: str; attempt: int; lease_expires_at: str; status: str; input_artifact_id: str; input_size_bytes: int; input_sha256: str; operation_json: str; local_input_asset_id: str | None; local_vsr_job_id: str | None; local_output_asset_id: str | None; log_sequence: int; upload_id: str | None; upload_part_size: int | None; updated_at: str
+    job_id: str; lease_id: str; attempt: int; lease_expires_at: str; status: str; input_artifact_id: str; input_size_bytes: int; input_sha256: str; operation_json: str; trace_id: str | None; client_request_id: str | None; local_input_asset_id: str | None; local_vsr_job_id: str | None; local_output_asset_id: str | None; log_sequence: int; upload_id: str | None; upload_part_size: int | None; updated_at: str
 
 class WorkerState:
     def __init__(self, state_dir: Path): self.root, self.path = state_dir, state_dir / "worker-state.db"
@@ -19,10 +19,14 @@ class WorkerState:
         try: yield connection; connection.commit()
         finally: connection.close()
     def initialize(self) -> None:
-        with self._connection() as c: c.executescript("""PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS leases (job_id TEXT NOT NULL, lease_id TEXT PRIMARY KEY, attempt INTEGER NOT NULL, lease_expires_at TEXT NOT NULL, status TEXT NOT NULL, input_artifact_id TEXT NOT NULL, input_size_bytes INTEGER NOT NULL, input_sha256 TEXT NOT NULL, operation_json TEXT NOT NULL, local_input_asset_id TEXT, local_vsr_job_id TEXT, local_output_asset_id TEXT, log_sequence INTEGER NOT NULL DEFAULT 0, upload_id TEXT, upload_part_size INTEGER, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS upload_parts (lease_id TEXT NOT NULL, part_number INTEGER NOT NULL, sha256 TEXT NOT NULL, PRIMARY KEY (lease_id, part_number));""")
+        with self._connection() as c:
+            c.executescript("""PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS leases (job_id TEXT NOT NULL, lease_id TEXT PRIMARY KEY, attempt INTEGER NOT NULL, lease_expires_at TEXT NOT NULL, status TEXT NOT NULL, input_artifact_id TEXT NOT NULL, input_size_bytes INTEGER NOT NULL, input_sha256 TEXT NOT NULL, operation_json TEXT NOT NULL, trace_id TEXT, client_request_id TEXT, local_input_asset_id TEXT, local_vsr_job_id TEXT, local_output_asset_id TEXT, log_sequence INTEGER NOT NULL DEFAULT 0, upload_id TEXT, upload_part_size INTEGER, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS upload_parts (lease_id TEXT NOT NULL, part_number INTEGER NOT NULL, sha256 TEXT NOT NULL, PRIMARY KEY (lease_id, part_number));""")
+            existing = {row[1] for row in c.execute("PRAGMA table_info(leases)")}
+            for column in ("trace_id", "client_request_id"):
+                if column not in existing: c.execute(f"ALTER TABLE leases ADD COLUMN {column} TEXT")
     def save_claim(self, claim: Any) -> None:
         operation = {"type":"subtitle_cleanup","options":{"subtitle_areas":claim.cleanup.subtitle_areas,"inpaint_mode":claim.cleanup.inpaint_mode}}
-        with self._connection() as c: c.execute("""INSERT INTO leases(job_id,lease_id,attempt,lease_expires_at,status,input_artifact_id,input_size_bytes,input_sha256,operation_json,log_sequence,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lease_id) DO UPDATE SET job_id=excluded.job_id,attempt=excluded.attempt,lease_expires_at=excluded.lease_expires_at,input_artifact_id=excluded.input_artifact_id,input_size_bytes=excluded.input_size_bytes,input_sha256=excluded.input_sha256,operation_json=excluded.operation_json,updated_at=excluded.updated_at""", (claim.job_id,claim.lease_id,claim.attempt,claim.lease_expires_at,"claimed",claim.input_artifact.artifact_id,claim.input_artifact.size_bytes,claim.input_artifact.sha256,json.dumps(operation,separators=(",",":")),0,self._now()))
+        with self._connection() as c: c.execute("""INSERT INTO leases(job_id,lease_id,attempt,lease_expires_at,status,input_artifact_id,input_size_bytes,input_sha256,operation_json,trace_id,client_request_id,log_sequence,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lease_id) DO UPDATE SET job_id=excluded.job_id,attempt=excluded.attempt,lease_expires_at=excluded.lease_expires_at,input_artifact_id=excluded.input_artifact_id,input_size_bytes=excluded.input_size_bytes,input_sha256=excluded.input_sha256,operation_json=excluded.operation_json,trace_id=excluded.trace_id,client_request_id=excluded.client_request_id,updated_at=excluded.updated_at""", (claim.job_id,claim.lease_id,claim.attempt,claim.lease_expires_at,"claimed",claim.input_artifact.artifact_id,claim.input_artifact.size_bytes,claim.input_artifact.sha256,json.dumps(operation,separators=(",",":")),claim.trace_id,claim.client_request_id,0,self._now()))
     def get(self, lease_id: str) -> LeaseRecord | None:
         with self._connection() as c: row=c.execute("SELECT * FROM leases WHERE lease_id=?",(lease_id,)).fetchone()
         return LeaseRecord(**dict(row)) if row else None
