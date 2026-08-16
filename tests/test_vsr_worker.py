@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from vsr_worker.models import ClaimedLease
 from vsr_worker.observability import JsonlAuditLogger
-from vsr_worker.relay_client import LeaseLostError, RelayTransientError
+from vsr_worker.relay_client import LeaseLostError, RelayProtocolError, RelayTransientError
 from vsr_worker.runtime import WorkerRuntime
 from vsr_worker.state import WorkerState
 from vsr_worker.transfer import download_with_resume, upload_output_with_resume
@@ -20,7 +20,9 @@ def lease(cancel_requested=False):
 
 
 class Response:
-    def __init__(self, offset): self.status=206 if offset else 200; self.body=BytesIO(b"abc"[offset:])
+    def __init__(self, offset):
+        self.status=206 if offset else 200; self.body=BytesIO(b"abc"[offset:]); self.headers={"Content-Length":str(3-offset)}
+        if offset: self.headers["Content-Range"]=f"bytes {offset}-2/3"
     def read(self, size=-1): return self.body.read(size)
     def close(self): pass
 
@@ -80,6 +82,26 @@ class WorkerTests(unittest.TestCase):
             output=root/"out.mp4"; output.write_bytes(b"abcdef"); relay=FakeRelay()
             self.assertEqual(upload_output_with_resume(relay,claimed,state,output),hashlib.sha256(b"abcdef").hexdigest())
             self.assertEqual(set(relay.parts),{0,1,2})
+        finally: shutil.rmtree(root,ignore_errors=True)
+    def test_truncated_input_download_is_recoverable_and_resumes(self):
+        class TruncatedResponse(Response):
+            def __init__(self): self.status=200; self.body=BytesIO(b"a"); self.headers={"Content-Length":"3"}
+        root=self.runtime_dir()
+        try:
+            claimed=lease(); destination=root/"input.mp4"
+            with self.assertRaises(RelayTransientError): download_with_resume(destination,3,claimed.input_artifact.sha256,lambda _:TruncatedResponse())
+            self.assertEqual(destination.with_suffix(".mp4.part").read_bytes(),b"a")
+            self.assertEqual(download_with_resume(destination,3,claimed.input_artifact.sha256,lambda offset:Response(offset)).read_bytes(),b"abc")
+        finally: shutil.rmtree(root,ignore_errors=True)
+    def test_download_rejects_incorrect_content_range(self):
+        class BadRange(Response):
+            def __init__(self):
+                super().__init__(1); self.headers["Content-Range"]="bytes 0-2/3"
+        root=self.runtime_dir()
+        try:
+            part=root/"input.mp4.part"; part.parent.mkdir(parents=True,exist_ok=True); part.write_bytes(b"a")
+            with self.assertRaises(RelayProtocolError) as error: download_with_resume(root/"input.mp4",3,lease().input_artifact.sha256,lambda _:BadRange())
+            self.assertIn("Content-Range",str(error.exception))
         finally: shutil.rmtree(root,ignore_errors=True)
     def test_operation_rejects_missing_options(self):
         with self.assertRaises(ValueError): ClaimedLease.from_response({"lease_id":"a","job_id":"j","attempt":1,"lease_expires_at":"x","operation":{"type":"subtitle_cleanup"},"input":{"artifact_id":"i","size_bytes":1,"sha256":"a"*64,"download_url":"/"}})
