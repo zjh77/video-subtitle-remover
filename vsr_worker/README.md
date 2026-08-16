@@ -42,6 +42,17 @@ Log records redact bearer credentials, sensitive mapping keys, URL query
 strings, and absolute Windows or Unix paths. Do not add raw request bodies,
 headers, runtime configuration, or exception tracebacks to audit events.
 
+## Relay reconnect behavior
+
+Temporary relay connection failures, request timeouts, and HTTP 5xx/408/429
+responses do not stop the Worker. It retains any active local task state,
+waits with capped exponential backoff, re-registers, recovers unfinished
+leases, and continues claiming. The JSONL log records `reconnect_wait` and
+`reconnected`. Defaults are one second initially and 30 seconds maximum;
+override them with `VSR_RELAY_RECONNECT_INITIAL_SECONDS` and
+`VSR_RELAY_RECONNECT_MAX_SECONDS` when necessary. Authentication failures and
+invalid relay protocol responses are not treated as successful connectivity.
+
 On restart it first calls the task center's lease-recovery endpoint for every
 non-terminal SQLite record. A valid lease resumes its persisted local VSR job;
 the fresh response supplies a replacement input download URL. A rejected lease

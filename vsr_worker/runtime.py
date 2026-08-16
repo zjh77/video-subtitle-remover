@@ -3,25 +3,37 @@ from __future__ import annotations
 import shutil, time
 from .redact import redact_text
 from .observability import JsonlAuditLogger
-from .relay_client import LeaseLostError
+from .relay_client import LeaseLostError, RelayError, RelayProtocolError, RelayTransientError
 from .state import WorkerState
 from .transfer import download_with_resume, upload_output_with_resume
 
 class _Cancelled(Exception): pass
 
 class WorkerRuntime:
- def __init__(s,settings,relay=None,local_vsr=None,state=None,audit_logger=None):
+ def __init__(s,settings,relay=None,local_vsr=None,state=None,audit_logger=None,sleep=None):
   from .relay_client import RelayClient
   from .local_vsr import LocalVsrClient
-  s.settings=settings;s.relay=relay or RelayClient(settings.relay);s.local_vsr=local_vsr or LocalVsrClient(settings.runtime.local_vsr_base_url);s.state=state or WorkerState(settings.runtime.state_dir);runtime=settings.runtime;s.audit=audit_logger or JsonlAuditLogger(getattr(runtime,'log_dir',None) or runtime.state_dir/'logs',getattr(runtime,'log_max_bytes',10485760),getattr(runtime,'log_backup_count',7))
+  s.settings=settings;s.relay=relay or RelayClient(settings.relay);s.local_vsr=local_vsr or LocalVsrClient(settings.runtime.local_vsr_base_url);s.state=state or WorkerState(settings.runtime.state_dir);runtime=settings.runtime;s.audit=audit_logger or JsonlAuditLogger(getattr(runtime,'log_dir',None) or runtime.state_dir/'logs',getattr(runtime,'log_max_bytes',10485760),getattr(runtime,'log_backup_count',7));s.sleep=sleep or time.sleep
  @staticmethod
  def _capabilities(): return {'subtitle_cleanup':True,'max_concurrency':1}
  def run_forever(s):
-  s.state.initialize();s._event('INFO','startup_validated');s._ensure_capacity();s.local_vsr.health();s._event('INFO','local_vsr_healthy');s.relay.register(s.settings.relay.worker_id,s._capabilities());s._event('INFO','worker_registered');s.recover_unfinished()
+  s.state.initialize();s._event('INFO','startup_validated');s._ensure_capacity();s.local_vsr.health();s._event('INFO','local_vsr_healthy');attempt=0
   while True:
-   heartbeat=s.relay.heartbeat(s._capabilities());s._event('INFO','heartbeat');s._ensure_capacity();lease=s.relay.claim(s.settings.runtime.claim_timeout_seconds)
-   if lease:s._event('INFO','lease_claimed',lease);s.process(lease,heartbeat.cancel_lease_ids)
-   else:s._event('INFO','claim_empty')
+   try:
+    s.relay.register(s.settings.relay.worker_id,s._capabilities());s._event('INFO','worker_registered')
+    if attempt:s._event('INFO','reconnected',error_code='RELAY_RECONNECTED',reconnect_attempt=attempt)
+    attempt=0;s.recover_unfinished()
+    while True:
+     heartbeat=s.relay.heartbeat(s._capabilities());s._event('INFO','heartbeat');s._ensure_capacity();lease=s.relay.claim(s.settings.runtime.claim_timeout_seconds)
+     if lease:s._event('INFO','lease_claimed',lease);s.process(lease,heartbeat.cancel_lease_ids)
+     else:s._event('INFO','claim_empty')
+   except LeaseLostError:
+    # Authentication/authorization failure is not transient; let the launcher report it.
+    raise
+   except RelayTransientError as exc:
+    attempt+=1;s._wait_to_reconnect(attempt,exc,'RELAY_TRANSIENT')
+   except (RelayProtocolError,RelayError) as exc:
+    attempt+=1;s._wait_to_reconnect(attempt,exc,'RELAY_PROTOCOL')
  def recover_unfinished(s):
   """Refresh active leases; rejected leases are fenced and never recreated."""
   for record in s.state.unfinished():
@@ -52,6 +64,8 @@ class WorkerRuntime:
    control.check();s._event('INFO','output_upload_started',lease,local_vsr_job_id=job_id);digest=upload_output_with_resume(s.relay,lease,s.state,output,lambda *_:control.check());s._event('INFO','output_uploaded',lease,local_vsr_job_id=job_id);control.check(True);s.relay.complete_task(lease,digest);s.state.update(lease.lease_id,status='succeeded');s._event('INFO','task_completed',lease,local_vsr_job_id=job_id,elapsed_ms=round((time.monotonic()-started)*1000));s._cleanup(lease)
   except _Cancelled:s._cancel(lease)
   except LeaseLostError:s._lose(s.state.get(lease.lease_id),'lease operation rejected')
+  except RelayTransientError as exc:s._event('WARNING','relay_connection_lost',lease,error_code='RELAY_TRANSIENT',error=redact_text(exc));raise
+  except RelayError as exc:s._event('WARNING','relay_connection_lost',lease,error_code='RELAY_PROTOCOL',error=redact_text(exc));raise
   except Exception as exc:s._fail(lease,exc)
  def _wait(s,lease,job_id,control):
   record=s.state.get(lease.lease_id);after=record.log_sequence if record else 0
@@ -70,16 +84,19 @@ class WorkerRuntime:
    if record and record.local_vsr_job_id:s.local_vsr.cancel(record.local_vsr_job_id)
    s.relay.cancel_task(lease);s.state.update(lease.lease_id,status='cancelled');s._event('INFO','task_cancelled',lease)
   except LeaseLostError:s._lose(s.state.get(lease.lease_id),'lease lost while cancelling');return
-  finally:s._cleanup(lease)
+  except RelayTransientError as exc:s._event('WARNING','relay_connection_lost',lease,error_code='RELAY_TRANSIENT',error=redact_text(exc));raise
+  s._cleanup(lease)
  def _fail(s,lease,exc):
   message=redact_text(exc)[:2000]
   try:s.relay.fail_task(lease,'WORKER_EXECUTION_FAILED',message);s.state.update(lease.lease_id,status='failed');s._event('ERROR','task_failed',lease,error_code='WORKER_EXECUTION_FAILED',error=message)
   except LeaseLostError:s._lose(s.state.get(lease.lease_id),'lease lost while failing');return
-  finally:s._diagnostic(lease.lease_id,message);s._cleanup(lease)
+  except RelayTransientError as relay_exc:s._diagnostic(lease.lease_id,message);s._event('WARNING','relay_connection_lost',lease,error_code='RELAY_TRANSIENT',error=redact_text(relay_exc));raise
+  s._diagnostic(lease.lease_id,message);s._cleanup(lease)
  def _fail_ambiguous(s,lease):
   try:s.relay.fail_task(lease,'RECOVERY_AMBIGUOUS_LOCAL_JOB','local VSR job state is ambiguous after restart');s.state.update(lease.lease_id,status='failed')
   except LeaseLostError:s._lose(s.state.get(lease.lease_id),'lease lost during recovery');return
-  finally:s._diagnostic(lease.lease_id,'RECOVERY_AMBIGUOUS_LOCAL_JOB');s._cleanup(lease)
+  except RelayTransientError as exc:s._diagnostic(lease.lease_id,'RECOVERY_AMBIGUOUS_LOCAL_JOB');s._event('WARNING','relay_connection_lost',lease,error_code='RELAY_TRANSIENT',error=redact_text(exc));raise
+  s._diagnostic(lease.lease_id,'RECOVERY_AMBIGUOUS_LOCAL_JOB');s._cleanup(lease)
  def _lose(s,record,reason):
   if record:s.state.update(record.lease_id,status='lease_lost');s._event('WARNING','lease_lost',record,error_code='LEASE_LOST',error=reason);s._diagnostic(record.lease_id,reason);s._cleanup_record(record)
  def _cleanup(s,lease):
@@ -97,6 +114,8 @@ class WorkerRuntime:
  def _ensure_capacity(s):
   s.settings.runtime.state_dir.mkdir(parents=True,exist_ok=True)
   if shutil.disk_usage(s.settings.runtime.state_dir).free<s.settings.runtime.min_free_bytes:raise RuntimeError('local worker disk is below the configured safety waterline')
+ def _wait_to_reconnect(s,attempt,exc,error_code):
+  runtime=s.settings.runtime;initial=getattr(runtime,'relay_reconnect_initial_seconds',1);maximum=getattr(runtime,'relay_reconnect_max_seconds',30);delay=min(maximum,initial*(2**(attempt-1)));s._event('WARNING','reconnect_wait',error_code=error_code,reconnect_attempt=attempt,delay_seconds=delay,error=redact_text(exc));s.sleep(delay)
  def _event(s,level,event,subject=None,**fields):
   record=subject if hasattr(subject,'trace_id') else (s.state.get(subject.lease_id) if subject else None)
   if subject and hasattr(subject,'lease_id'):

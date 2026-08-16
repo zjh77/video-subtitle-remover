@@ -356,6 +356,7 @@ $RECYCLE.BIN/
 /vsr_worker/worker_data/
 /vsr_worker/*.db
 /vsr_worker/*.log
+/tests/.runtime-test-state-*
 /vsr_api/config.json
 /vsr_api/data/
 /.tmp-*

@@ -14,7 +14,9 @@
     "heartbeat_seconds": 20,
     "claim_timeout_seconds": 20,
     "lease_seconds": 90,
-    "lease_renew_seconds": 20
+    "lease_renew_seconds": 20,
+    "relay_reconnect_initial_seconds": 1,
+    "relay_reconnect_max_seconds": 30
   },
   "observability": {
     "log_dir": "",

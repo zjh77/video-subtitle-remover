@@ -1,6 +1,6 @@
 """Private-CA HTTPS adapter for video-task-server lease endpoints."""
 from __future__ import annotations
-import json, ssl
+import json, socket, ssl
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -10,6 +10,7 @@ from .config import RelaySettings
 from .models import ClaimedLease, UploadSession
 class RelayError(RuntimeError): pass
 class RelayProtocolError(RelayError): pass
+class RelayTransientError(RelayError): pass
 class LeaseLostError(RelayError): pass
 class _NoRedirect(HTTPRedirectHandler):
  def redirect_request(self,*args): return None
@@ -48,8 +49,8 @@ class RelayClient:
   absolute=urljoin(self.origin+"/",url); p=urlsplit(absolute)
   if p.scheme!="https" or p.netloc!=self.parts.netloc: raise RelayProtocolError("artifact URL is outside relay origin")
   try:return self.opener.open(Request(absolute,headers={"Range":f"bytes={start}-"} if start else {},method="GET"),timeout=60)
-  except HTTPError as e: raise RelayError(f"artifact download returned HTTP {e.code}") from e
-  except (URLError,ssl.SSLError) as e: raise RelayError("artifact download connection failed") from e
+  except HTTPError as e: raise self._http_error(e,"artifact download") from e
+  except (URLError,ssl.SSLError,TimeoutError,socket.timeout) as e: raise self._connection_error(e,"artifact download") from e
  def _lease(self,c): return f"/worker-leases/{quote(c.lease_id,safe='')}"
  def _worker(self): return quote(self.settings.worker_id,safe="")
  def _json(self,m,p,data=None,h=None): return self._json_status(m,p,data,30,False,h)[1]
@@ -62,10 +63,18 @@ class RelayClient:
   except HTTPError as e:
    if empty and e.code==204:return 204,{}
    if e.code in {401,403,409}:raise LeaseLostError(f"relay rejected request with HTTP {e.code}") from e
-   raise RelayError(f"relay request returned HTTP {e.code}") from e
-  except (URLError,ssl.SSLError) as e: raise RelayError("relay HTTPS connection failed") from e
+   raise self._http_error(e,"relay request") from e
+  except (URLError,ssl.SSLError,TimeoutError,socket.timeout) as e: raise self._connection_error(e,"relay HTTPS") from e
   if empty and status==204:return 204,{}
   try:v=json.loads(raw)
   except Exception as e:raise RelayProtocolError("relay response was not valid JSON") from e
   if not isinstance(v,dict):raise RelayProtocolError("relay response JSON must be object")
   return status,v
+ def _http_error(self,error,context):
+  if error.code in {408,429} or error.code>=500:return RelayTransientError(f"{context} temporarily unavailable HTTP {error.code}")
+  return RelayProtocolError(f"{context} returned unexpected HTTP {error.code}")
+ def _connection_error(self,error,context):
+  reason=getattr(error,"reason",error)
+  if isinstance(reason,ssl.SSLCertVerificationError):return RelayProtocolError(f"{context} TLS validation failed")
+  if isinstance(reason,ssl.SSLError):return RelayProtocolError(f"{context} TLS connection failed")
+  return RelayTransientError(f"{context} connection failed")

@@ -46,3 +46,10 @@ class JsonlAuditLogger:
                     handler.close()
                 except Exception:
                     pass
+
+    def close(self) -> None:
+        for handler in list(self.logger.handlers):
+            try:
+                handler.close()
+            finally:
+                self.logger.removeHandler(handler)

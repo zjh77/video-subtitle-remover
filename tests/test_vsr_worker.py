@@ -5,10 +5,11 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 from vsr_worker.models import ClaimedLease
 from vsr_worker.observability import JsonlAuditLogger
-from vsr_worker.relay_client import LeaseLostError
+from vsr_worker.relay_client import LeaseLostError, RelayTransientError
 from vsr_worker.runtime import WorkerRuntime
 from vsr_worker.state import WorkerState
 from vsr_worker.transfer import download_with_resume, upload_output_with_resume
@@ -50,6 +51,7 @@ class FakeRelay:
 class FakeLocal:
     def __init__(self): self.created=0; self.cancelled=[]; self.deleted=[]
     def upload_asset(self, *_): return "input_asset"
+    def health(self): return {"status":"ok"}
     def create_job(self, *_): self.created += 1; return "local_job"
     def get_logs(self, *_): return {"next_after":0,"items":[]}
     def get_job(self, *_): return {"status":"succeeded","output_asset_id":"output_asset","progress":100}
@@ -60,13 +62,16 @@ class FakeLocal:
 
 class WorkerTests(unittest.TestCase):
     def runtime_dir(self):
-        path=Path.cwd()/"tests"/".runtime-test-state"
-        shutil.rmtree(path,ignore_errors=True); path.mkdir(parents=True); (path/".write-probe").write_text("ok")
+        path=Path.cwd()/"tests"/f".runtime-test-state-{uuid4().hex}"
+        path.mkdir(parents=True); (path/".write-probe").write_text("ok")
         return path
     def setup_runtime(self, relay=None, local=None):
         root=self.runtime_dir(); state=WorkerState(root); state.initialize()
-        settings=SimpleNamespace(runtime=SimpleNamespace(state_dir=root,lease_renew_seconds=1,heartbeat_seconds=1),relay=SimpleNamespace())
-        return root,state,WorkerRuntime(settings,relay or FakeRelay(),local or FakeLocal(),state)
+        settings=SimpleNamespace(runtime=SimpleNamespace(state_dir=root,lease_renew_seconds=1,heartbeat_seconds=1,min_free_bytes=0,claim_timeout_seconds=20,relay_reconnect_initial_seconds=1,relay_reconnect_max_seconds=4),relay=SimpleNamespace(worker_id="worker_1"))
+        runtime=WorkerRuntime(settings,relay or FakeRelay(),local or FakeLocal(),state)
+        self.addCleanup(shutil.rmtree,root,True)
+        self.addCleanup(runtime.audit.close)
+        return root,state,runtime
     def test_claim_download_parts_complete(self):
         root=self.runtime_dir()
         try:
@@ -140,6 +145,34 @@ class WorkerTests(unittest.TestCase):
             self.assertIn('"event":"request"',text); self.assertIn('[REDACTED]',text); self.assertIn('[LOCAL_PATH]',text)
             self.assertNotIn("token-value",text); self.assertNotIn("signature=secret",text); self.assertNotIn("sensitive\\video",text)
             self.assertNotIn("private/video",text)
+        finally: logger.close(); shutil.rmtree(root,ignore_errors=True)
+    def test_run_forever_reconnects_after_transient_register_failure(self):
+        class Audit:
+            def __init__(self): self.events=[]
+            def emit(self, level, event, **fields): self.events.append((level,event,fields))
+        class ReconnectingRelay:
+            def __init__(self): self.register_calls=0
+            def register(self, *_):
+                self.register_calls += 1
+                if self.register_calls == 1: raise RelayTransientError("network unavailable")
+            def heartbeat(self, *_): return SimpleNamespace(cancel_lease_ids=frozenset())
+            def claim(self, _): raise KeyboardInterrupt()
+        root,state,_=self.setup_runtime(); delays=[]; audit=Audit(); relay=ReconnectingRelay()
+        settings=SimpleNamespace(runtime=SimpleNamespace(state_dir=root,lease_renew_seconds=1,heartbeat_seconds=1,min_free_bytes=0,claim_timeout_seconds=20,relay_reconnect_initial_seconds=1,relay_reconnect_max_seconds=4),relay=SimpleNamespace(worker_id="worker_1"))
+        runtime=WorkerRuntime(settings,relay,FakeLocal(),state,audit,sleep=delays.append)
+        try:
+            with self.assertRaises(KeyboardInterrupt): runtime.run_forever()
+            self.assertEqual(relay.register_calls,2); self.assertEqual(delays,[1])
+            self.assertIn("reconnect_wait",[event for _,event,_ in audit.events]); self.assertIn("reconnected",[event for _,event,_ in audit.events])
+        finally: shutil.rmtree(root,ignore_errors=True)
+    def test_transient_lease_failure_preserves_recovery_state(self):
+        class DroppedRelay(FakeRelay):
+            def open_input(self, *_): raise RelayTransientError("network unavailable")
+        root,state,runtime=self.setup_runtime(DroppedRelay())
+        try:
+            with self.assertRaises(RelayTransientError): runtime.process(lease())
+            self.assertEqual(state.get("att_1").status,"claimed")
+            self.assertTrue((root/"tasks"/"vcj_1"/"att_1").exists())
         finally: shutil.rmtree(root,ignore_errors=True)
 
 if __name__=="__main__": unittest.main()

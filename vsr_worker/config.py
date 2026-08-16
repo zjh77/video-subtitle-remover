@@ -84,6 +84,8 @@ class RuntimeSettings:
     log_dir: Path | None
     log_max_bytes: int
     log_backup_count: int
+    relay_reconnect_initial_seconds: int
+    relay_reconnect_max_seconds: int
 
 
 @dataclass(frozen=True)
@@ -140,7 +142,11 @@ def load_settings() -> WorkerSettings:
         log_dir=Path(str(_setting(data, "VSR_RELAY_LOG_DIR", "observability", "log_dir")).strip()).expanduser() if str(_setting(data, "VSR_RELAY_LOG_DIR", "observability", "log_dir")).strip() else None,
         log_max_bytes=_positive_int(_setting(data, "VSR_RELAY_LOG_MAX_BYTES", "observability", "log_max_bytes", 10485760), "log_max_bytes"),
         log_backup_count=_positive_int(_setting(data, "VSR_RELAY_LOG_BACKUP_COUNT", "observability", "log_backup_count", 7), "log_backup_count", 1),
+        relay_reconnect_initial_seconds=_positive_int(_setting(data, "VSR_RELAY_RECONNECT_INITIAL_SECONDS", "runtime", "relay_reconnect_initial_seconds", 1), "relay_reconnect_initial_seconds"),
+        relay_reconnect_max_seconds=_positive_int(_setting(data, "VSR_RELAY_RECONNECT_MAX_SECONDS", "runtime", "relay_reconnect_max_seconds", 30), "relay_reconnect_max_seconds"),
     )
     if runtime.claim_timeout_seconds > 25:
         raise ConfigError("claim_timeout_seconds must not exceed 25")
+    if runtime.relay_reconnect_initial_seconds > runtime.relay_reconnect_max_seconds:
+        raise ConfigError("relay_reconnect_initial_seconds must not exceed relay_reconnect_max_seconds")
     return WorkerSettings(RelaySettings(base_url, ca_file, worker_id, _read_token(data)), runtime)
