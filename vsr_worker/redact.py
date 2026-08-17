@@ -43,6 +43,8 @@ def redact_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
             result[key] = redact_mapping(item)
         elif isinstance(item, list):
             result[key] = [redact_mapping(part) if isinstance(part, Mapping) else redact_text(part) for part in item]
+        elif item is None or isinstance(item, (bool, int, float)):
+            result[key] = item
         else:
             result[key] = redact_text(item)
     return result

@@ -115,6 +115,10 @@ class WorkerTests(unittest.TestCase):
             lines=[json.loads(line) for line in (root/"logs"/"worker.jsonl").read_text(encoding="utf-8").splitlines()]
             completed=next(line for line in lines if line["event"]=="task_completed")
             self.assertEqual(completed["trace_id"],"trace_1"); self.assertEqual(completed["client_request_id"],"request_1")
+            downloaded=next(line for line in lines if line["event"]=="input_download_completed")
+            uploaded=next(line for line in lines if line["event"]=="output_upload_completed")
+            self.assertEqual(downloaded["size_bytes"],3); self.assertEqual(uploaded["size_bytes"],3)
+            self.assertIn("throughput_mbps",downloaded); self.assertIn("elapsed_ms",uploaded)
         finally: shutil.rmtree(root,ignore_errors=True)
     def test_runtime_cancel_stops_upload_and_reports_cancelled(self):
         root,state,runtime=self.setup_runtime(FakeRelay(cancel_on_renew=True))
@@ -163,10 +167,14 @@ class WorkerTests(unittest.TestCase):
         try:
             logger=JsonlAuditLogger(root/"audit",1024,1)
             logger.emit("INFO","request",authorization="Bearer token-value",download_url="https://example.invalid/file?signature=secret",path="C:\\sensitive\\video.mp4",unix_path="/private/video.mp4",message="ok")
+            logger.emit("INFO","heartbeat",job_id="job_1")
+            logger.emit("INFO","input_download_completed",job_id="job_1",size_bytes=3,elapsed_ms=2,throughput_mbps=12.0,resumed=False)
             text=(root/"audit"/"worker.jsonl").read_text(encoding="utf-8")
+            summary=(root/"audit"/"worker-summary.log").read_text(encoding="utf-8")
             self.assertIn('"event":"request"',text); self.assertIn('[REDACTED]',text); self.assertIn('[LOCAL_PATH]',text)
             self.assertNotIn("token-value",text); self.assertNotIn("signature=secret",text); self.assertNotIn("sensitive\\video",text)
             self.assertNotIn("private/video",text)
+            self.assertIn("input_download_completed",summary); self.assertNotIn("heartbeat",summary)
         finally: logger.close(); shutil.rmtree(root,ignore_errors=True)
     def test_run_forever_reconnects_after_transient_register_failure(self):
         class Audit:

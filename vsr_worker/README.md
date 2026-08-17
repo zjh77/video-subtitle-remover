@@ -26,8 +26,11 @@ The Worker checks its private CA file, token, state disk capacity, and local VSR
 
 ## Observability logs
 
-The Worker writes redacted, rotating JSONL audit logs to `logs/worker.jsonl`
-under its state directory by default. Set `VSR_RELAY_LOG_DIR` (or
+The Worker writes two redacted, rotating logs under `logs/` in its state
+directory by default. `worker-summary.log` is the normal human-readable view:
+it contains startup, registration, lease, transfer, VSR, completion/failure,
+and reconnect milestones. `worker.jsonl` is the detailed diagnostic view and
+also contains heartbeat, renew, and empty-claim events. Set `VSR_RELAY_LOG_DIR` (or
 `observability.log_dir` in protected local configuration) to choose another
 protected local directory. `VSR_RELAY_LOG_MAX_BYTES` defaults to 10 MiB and
 `VSR_RELAY_LOG_BACKUP_COUNT` defaults to 7.
@@ -41,6 +44,11 @@ the local VSR API status and logs.
 Log records redact bearer credentials, sensitive mapping keys, URL query
 strings, and absolute Windows or Unix paths. Do not add raw request bodies,
 headers, runtime configuration, or exception tracebacks to audit events.
+
+For a live production view, use `Get-Content <state-dir>\logs\worker-summary.log
+-Wait`. Use `worker.jsonl` only for detailed diagnosis. Input-download and
+output-upload completion/failure records include `size_bytes`,
+`transferred_bytes`, `elapsed_ms`, `throughput_mbps`, and `resumed`.
 
 ## Relay reconnect behavior
 

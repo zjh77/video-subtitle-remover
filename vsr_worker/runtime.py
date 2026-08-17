@@ -54,14 +54,21 @@ class WorkerRuntime:
    job_id,input_asset_id=record.local_vsr_job_id,record.local_input_asset_id
    if not job_id:
     if input_asset_id:raise RuntimeError('ambiguous local VSR job after restart')
-    s._event('INFO','input_download_started',lease);download_with_resume(source,lease.input_artifact.size_bytes,lease.input_artifact.sha256,lambda offset:s.relay.open_input(lease.input_artifact.download_url,offset),lambda *_:control.check());s._event('INFO','input_verified',lease)
+    input_stats={'size_bytes':lease.input_artifact.size_bytes,'transferred_bytes':0,'resumed':source.with_suffix(source.suffix+'.part').exists()};input_started=time.monotonic();s._event('INFO','input_download_started',lease,**input_stats)
+    try:download_with_resume(source,lease.input_artifact.size_bytes,lease.input_artifact.sha256,lambda offset:s.relay.open_input(lease.input_artifact.download_url,offset),lambda *_:control.check(),stats=input_stats)
+    except Exception as exc:s._event('ERROR','input_download_failed',lease,**s._transfer_fields(input_stats,input_started),error_code='INPUT_DOWNLOAD_FAILED',error=redact_text(exc));raise
+    s._event('INFO','input_download_completed',lease,**s._transfer_fields(input_stats,input_started))
     control.check();s._event('INFO','local_asset_upload_started',lease);input_asset_id=s.local_vsr.upload_asset(source,lambda *_:control.check());s.state.update(lease.lease_id,local_input_asset_id=input_asset_id);s._event('INFO','local_asset_uploaded',lease)
-    control.check();s._event('INFO','local_job_create_started',lease);job_id=s.local_vsr.create_job(input_asset_id,lease.cleanup.subtitle_areas,lease.cleanup.inpaint_mode);s.state.update(lease.lease_id,local_vsr_job_id=job_id,status='running');s._event('INFO','local_job_created',lease,local_vsr_job_id=job_id)
-   job=s._wait(lease,job_id,control)
+    control.check();s._event('INFO','local_job_create_started',lease);job_id=s.local_vsr.create_job(input_asset_id,lease.cleanup.subtitle_areas,lease.cleanup.inpaint_mode);s.state.update(lease.lease_id,local_vsr_job_id=job_id,status='running')
+   vsr_started=time.monotonic();s._event('INFO','local_vsr_started',lease,local_vsr_job_id=job_id,resumed=bool(record.local_vsr_job_id));job=s._wait(lease,job_id,control)
    if job.get('status')!='succeeded':raise RuntimeError('local VSR job did not succeed')
+   s._event('INFO','local_vsr_completed',lease,local_vsr_job_id=job_id,elapsed_ms=round((time.monotonic()-vsr_started)*1000))
    output_asset_id=str(job['output_asset_id']);s.state.update(lease.lease_id,local_output_asset_id=output_asset_id)
    if not output.exists():s._event('INFO','local_output_download_started',lease,local_vsr_job_id=job_id);s.local_vsr.download_output(output_asset_id,output);s._event('INFO','local_output_downloaded',lease,local_vsr_job_id=job_id)
-   control.check();s._event('INFO','output_upload_started',lease,local_vsr_job_id=job_id);digest=upload_output_with_resume(s.relay,lease,s.state,output,lambda *_:control.check());s._event('INFO','output_uploaded',lease,local_vsr_job_id=job_id);control.check(True);s.relay.complete_task(lease,digest);s.state.update(lease.lease_id,status='succeeded');s._event('INFO','task_completed',lease,local_vsr_job_id=job_id,elapsed_ms=round((time.monotonic()-started)*1000));s._cleanup(lease)
+   output_stats={'size_bytes':output.stat().st_size,'transferred_bytes':0,'resumed':False};output_started=time.monotonic();control.check();s._event('INFO','output_upload_started',lease,local_vsr_job_id=job_id,**output_stats)
+   try:digest=upload_output_with_resume(s.relay,lease,s.state,output,lambda *_:control.check(),stats=output_stats)
+   except Exception as exc:s._event('ERROR','output_upload_failed',lease,local_vsr_job_id=job_id,**s._transfer_fields(output_stats,output_started),error_code='OUTPUT_UPLOAD_FAILED',error=redact_text(exc));raise
+   s._event('INFO','output_upload_completed',lease,local_vsr_job_id=job_id,**s._transfer_fields(output_stats,output_started));control.check(True);s.relay.complete_task(lease,digest);s.state.update(lease.lease_id,status='succeeded');s._event('INFO','task_completed',lease,local_vsr_job_id=job_id,elapsed_ms=round((time.monotonic()-started)*1000));s._cleanup(lease)
   except _Cancelled:s._cancel(lease)
   except LeaseLostError:s._lose(s.state.get(lease.lease_id),'lease operation rejected')
   except RelayTransientError as exc:s._event('WARNING','relay_connection_lost',lease,error_code='RELAY_TRANSIENT',error=redact_text(exc));raise
@@ -114,6 +121,8 @@ class WorkerRuntime:
  def _ensure_capacity(s):
   s.settings.runtime.state_dir.mkdir(parents=True,exist_ok=True)
   if shutil.disk_usage(s.settings.runtime.state_dir).free<s.settings.runtime.min_free_bytes:raise RuntimeError('local worker disk is below the configured safety waterline')
+ def _transfer_fields(s,stats,started):
+  elapsed=max(1,round((time.monotonic()-started)*1000));return {**stats,'elapsed_ms':elapsed,'throughput_mbps':round((stats.get('transferred_bytes',0)*8)/(elapsed*1000),3)}
  def _wait_to_reconnect(s,attempt,exc,error_code):
   runtime=s.settings.runtime;initial=getattr(runtime,'relay_reconnect_initial_seconds',1);maximum=getattr(runtime,'relay_reconnect_max_seconds',30);delay=min(maximum,initial*(2**(attempt-1)));s._event('WARNING','reconnect_wait',error_code=error_code,reconnect_attempt=attempt,delay_seconds=delay,error=redact_text(exc));s.sleep(delay)
  def _event(s,level,event,subject=None,**fields):
