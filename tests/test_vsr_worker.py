@@ -2,14 +2,16 @@ import hashlib
 import json
 import shutil
 import unittest
+from http.client import RemoteDisconnected
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 from vsr_worker.models import ClaimedLease
+from vsr_worker.local_vsr import LocalVsrTransientError
 from vsr_worker.observability import JsonlAuditLogger
-from vsr_worker.relay_client import LeaseLostError, RelayProtocolError, RelayTransientError
+from vsr_worker.relay_client import LeaseLostError, RelayClient, RelayProtocolError, RelayTransientError
 from vsr_worker.runtime import WorkerRuntime
 from vsr_worker.state import WorkerState
 from vsr_worker.transfer import download_with_resume, upload_output_with_resume
@@ -204,5 +206,42 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(state.get("att_1").status,"claimed")
             self.assertTrue((root/"tasks"/"vcj_1"/"att_1").exists())
         finally: shutil.rmtree(root,ignore_errors=True)
+
+    def test_local_vsr_poll_disconnect_retries_existing_job(self):
+        class FlakyLocal(FakeLocal):
+            def __init__(self):
+                super().__init__(); self.log_calls=0
+            def get_logs(self, *_):
+                self.log_calls += 1
+                if self.log_calls == 1:
+                    raise LocalVsrTransientError("local VSR API request failed")
+                return {"next_after":0,"items":[]}
+
+        root=self.runtime_dir(); state=WorkerState(root); state.initialize(); delays=[]
+        settings=SimpleNamespace(runtime=SimpleNamespace(state_dir=root,lease_renew_seconds=1,heartbeat_seconds=2,min_free_bytes=0,claim_timeout_seconds=20,relay_reconnect_initial_seconds=1,relay_reconnect_max_seconds=4),relay=SimpleNamespace(worker_id="worker_1"))
+        runtime=WorkerRuntime(settings,FakeRelay(),FlakyLocal(),state,sleep=delays.append)
+        self.addCleanup(runtime.audit.close)
+        try:
+            runtime.process(lease())
+            self.assertTrue(runtime.relay.completed)
+            self.assertEqual(runtime.local_vsr.created,1)
+            self.assertEqual(runtime.local_vsr.log_calls,2)
+            self.assertEqual(delays,[1])
+            events=[json.loads(line)["event"] for line in (root/"logs"/"worker.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertIn("local_vsr_retry",events)
+        finally: shutil.rmtree(root,ignore_errors=True)
+
+    def test_remote_disconnect_is_reconnectable(self):
+        class DisconnectingOpener:
+            def open(self, *_args, **_kwargs):
+                raise RemoteDisconnected("Remote end closed connection without response")
+
+        client=object.__new__(RelayClient)
+        client.origin="https://relay.example"
+        client.settings=SimpleNamespace(worker_id="worker_1",worker_token="test-token")
+        client.opener=DisconnectingOpener()
+        with self.assertRaises(RelayTransientError) as error:
+            client._json("POST","/workers/worker_1/register",{})
+        self.assertIn("connection failed",str(error.exception))
 
 if __name__=="__main__": unittest.main()

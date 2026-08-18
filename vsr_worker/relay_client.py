@@ -1,6 +1,7 @@
 """Private-CA HTTPS adapter for video-task-server lease endpoints."""
 from __future__ import annotations
 import json, socket, ssl
+from http.client import HTTPException
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -50,7 +51,7 @@ class RelayClient:
   if p.scheme!="https" or p.netloc!=self.parts.netloc: raise RelayProtocolError("artifact URL is outside relay origin")
   try:return self.opener.open(Request(absolute,headers={"Range":f"bytes={start}-"} if start else {},method="GET"),timeout=60)
   except HTTPError as e: raise self._http_error(e,"artifact download") from e
-  except (URLError,ssl.SSLError,TimeoutError,socket.timeout) as e: raise self._connection_error(e,"artifact download") from e
+  except (URLError,ssl.SSLError,TimeoutError,socket.timeout,HTTPException,OSError) as e: raise self._connection_error(e,"artifact download") from e
  def _lease(self,c): return f"/worker-leases/{quote(c.lease_id,safe='')}"
  def _worker(self): return quote(self.settings.worker_id,safe="")
  def _json(self,m,p,data=None,h=None): return self._json_status(m,p,data,30,False,h)[1]
@@ -64,7 +65,10 @@ class RelayClient:
    if empty and e.code==204:return 204,{}
    if e.code in {401,403,409}:raise LeaseLostError(f"relay rejected request with HTTP {e.code}") from e
    raise self._http_error(e,"relay request") from e
-  except (URLError,ssl.SSLError,TimeoutError,socket.timeout) as e: raise self._connection_error(e,"relay HTTPS") from e
+  # http.client.RemoteDisconnected (usually a proxy/upstream restart) is an
+  # HTTPException/ConnectionResetError rather than a URLError.  Treat it as a
+  # reconnectable transport failure so the runtime keeps its lease state.
+  except (URLError,ssl.SSLError,TimeoutError,socket.timeout,HTTPException,OSError) as e: raise self._connection_error(e,"relay HTTPS") from e
   if empty and status==204:return 204,{}
   try:v=json.loads(raw)
   except Exception as e:raise RelayProtocolError("relay response was not valid JSON") from e

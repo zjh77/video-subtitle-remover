@@ -16,6 +16,10 @@ class LocalVsrError(RuntimeError):
     pass
 
 
+class LocalVsrTransientError(LocalVsrError):
+    """A loopback HTTP transport interruption that may safely be retried."""
+
+
 @dataclass
 class DownloadResponse:
     connection: http.client.HTTPConnection
@@ -73,7 +77,7 @@ class LocalVsrClient:
             value = self._read_json_response(conn)
             return str(value["asset_id"])
         except (OSError, http.client.HTTPException, KeyError) as exc:
-            raise LocalVsrError("could not upload input video to local VSR") from exc
+            raise LocalVsrTransientError("could not upload input video to local VSR") from exc
 
     def create_job(self, input_asset_id: str, subtitle_areas: list[dict[str, int]], inpaint_mode: str) -> str:
         value = self._json("POST", "/api/v1/jobs", {"input_asset_id": input_asset_id, "subtitle_areas": subtitle_areas, "inpaint_mode": inpaint_mode})
@@ -104,7 +108,7 @@ class LocalVsrClient:
             return DownloadResponse(conn, response)
         except (OSError, http.client.HTTPException) as exc:
             conn.close()
-            raise LocalVsrError("could not download local VSR output") from exc
+            raise LocalVsrTransientError("could not download local VSR output") from exc
 
     def download_output(self, asset_id: str, destination: Path) -> None:
         response = self.open_output(asset_id, 0)
@@ -128,7 +132,11 @@ class LocalVsrClient:
             conn.request(method, self._path(path), body=body, headers=headers)
             return self._read_json_response(conn)
         except (OSError, http.client.HTTPException, json.JSONDecodeError) as exc:
-            raise LocalVsrError("local VSR API request failed") from exc
+            # RemoteDisconnected and IncompleteRead are HTTPException values.
+            # They are transient for a loopback polling request: the persisted
+            # local VSR job ID lets the runtime ask again without starting work
+            # a second time.
+            raise LocalVsrTransientError("local VSR API request failed") from exc
         finally:
             conn.close()
 

@@ -75,14 +75,22 @@ class WorkerRuntime:
   except RelayError as exc:s._event('WARNING','relay_connection_lost',lease,error_code='RELAY_PROTOCOL',error=redact_text(exc));raise
   except Exception as exc:s._fail(lease,exc)
  def _wait(s,lease,job_id,control):
+  from .local_vsr import LocalVsrTransientError
   record=s.state.get(lease.lease_id);after=record.log_sequence if record else 0
+  local_attempt=0
   while True:
-   control.check();logs=s.local_vsr.get_logs(job_id,after);after=logs.get('next_after',after)
+   control.check()
+   try:
+    logs=s.local_vsr.get_logs(job_id,after);after=logs.get('next_after',after)
+    job=s.local_vsr.get_job(job_id)
+   except LocalVsrTransientError as exc:
+    local_attempt+=1;delay=min(max(1,s.settings.runtime.heartbeat_seconds//2),2**(local_attempt-1));s._event('WARNING','local_vsr_retry',lease,local_vsr_job_id=job_id,error_code='LOCAL_VSR_TRANSIENT',retry_attempt=local_attempt,delay_seconds=delay,error=redact_text(exc));s.sleep(delay);continue
+   local_attempt=0
    for item in logs.get('items',[]):
     record=s.state.get(lease.lease_id)
     if record is None:raise RuntimeError('local lease state disappeared')
     seq=record.log_sequence+1;s.relay.report_log(lease,seq,str(item.get('level','INFO')),redact_text(item.get('message','')));s.state.update(lease.lease_id,log_sequence=seq)
-   job=s.local_vsr.get_job(job_id);s.relay.report_progress(lease,job.get('progress'),redact_text(job.get('message','')))
+   s.relay.report_progress(lease,job.get('progress'),redact_text(job.get('message','')))
    if job.get('status') in {'succeeded','failed','cancelled'}:return job
    time.sleep(1)
  def _cancel(s,lease):
