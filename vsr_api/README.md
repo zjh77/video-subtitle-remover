@@ -33,8 +33,8 @@ Tasks execute one at a time in a dedicated child process. This isolates VSR mode
 ## Service logs
 
 The API also writes a redacted, rotating service log at
-`<VSR_API_DATA_ROOT>\logs\vsr-api.log` (for the deployment default:
-`D:\short\vsr-data\logs\vsr-api.log`). It records request failures,
+`<VSR_API_LOG_DIR>\vsr-api.log`. If `VSR_API_LOG_DIR` is not set, it defaults
+to `<VSR_API_DATA_ROOT>\logs`. It records request failures,
 unhandled exception tracebacks, and local VSR lifecycle events with the local
 `job_id`. The default rotation is 10 MiB with seven backups; adjust only with
 `VSR_API_LOG_MAX_BYTES` and `VSR_API_LOG_BACKUP_COUNT` when necessary.
@@ -42,9 +42,8 @@ unhandled exception tracebacks, and local VSR lifecycle events with the local
 Watch it while diagnosing a task:
 
 ```powershell
-Get-Content '<data-root>\logs\vsr-api.log' -Wait
+Get-Content '<log-dir>\vsr-api.log' -Wait
 ```
 
-Replace `<data-root>` with the value supplied to the API process through
-`VSR_API_DATA_ROOT` (or its protected local API configuration). Log values are
+Replace `<log-dir>` with the configured log directory. Log values are
 redacted for bearer credentials, URL query strings, and absolute local paths.

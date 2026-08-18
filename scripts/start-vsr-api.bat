@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 rem Start the loopback-only VSR API from this repository, using the VSR Conda environment.
-rem Pre-set VSR_API_HOST, VSR_API_PORT, or VSR_API_DATA_ROOT to override defaults.
+rem Pre-set VSR_API_HOST, VSR_API_PORT, VSR_API_DATA_ROOT, or VSR_API_LOG_DIR to override defaults.
 set "PROJECT_ROOT=%~dp0.."
 pushd "%PROJECT_ROOT%" >nul || (
   echo ERROR: Could not open the VSR project root.
@@ -33,6 +33,7 @@ if errorlevel 1 (
 if not defined VSR_API_HOST set "VSR_API_HOST=127.0.0.1"
 if not defined VSR_API_PORT set "VSR_API_PORT=8020"
 if not defined VSR_API_DATA_ROOT set "VSR_API_DATA_ROOT=D:\short\vsr-data"
+if not defined VSR_API_LOG_DIR set "VSR_API_LOG_DIR=D:\short\vsr-relay-state\logs"
 
 echo Starting VSR API on %VSR_API_HOST%:%VSR_API_PORT% ...
 python -m vsr_api.run
