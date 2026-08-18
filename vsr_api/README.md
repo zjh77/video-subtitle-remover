@@ -29,3 +29,22 @@ Copy `vsr_api/config.example.json` to the ignored local file `vsr_api/config.jso
 The service stores its SQLite database, uploaded assets, generated assets, per-job work folders, and task logs under `storage.data_root`. Input and output assets are separate immutable files. Completed output assets can be downloaded only through the output asset ID returned by a successful job, then deleted with `DELETE /api/v1/assets/{asset_id}`.
 
 Tasks execute one at a time in a dedicated child process. This isolates VSR model state and allows a cancellation request to terminate that process and its FFmpeg child-process tree on Windows.
+
+## Service logs
+
+The API also writes a redacted, rotating service log at
+`<VSR_API_DATA_ROOT>\logs\vsr-api.log` (for the deployment default:
+`D:\short\vsr-data\logs\vsr-api.log`). It records request failures,
+unhandled exception tracebacks, and local VSR lifecycle events with the local
+`job_id`. The default rotation is 10 MiB with seven backups; adjust only with
+`VSR_API_LOG_MAX_BYTES` and `VSR_API_LOG_BACKUP_COUNT` when necessary.
+
+Watch it while diagnosing a task:
+
+```powershell
+Get-Content '<data-root>\logs\vsr-api.log' -Wait
+```
+
+Replace `<data-root>` with the value supplied to the API process through
+`VSR_API_DATA_ROOT` (or its protected local API configuration). Log values are
+redacted for bearer credentials, URL query strings, and absolute local paths.

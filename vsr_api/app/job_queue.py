@@ -13,6 +13,7 @@ import cv2
 
 from . import db
 from .runner import run_vsr
+from .service_logging import log_event
 
 
 def now() -> str: return datetime.now(timezone.utc).isoformat()
@@ -52,6 +53,7 @@ class JobQueue:
         output = paths["work"] / f"{Path(asset['filename']).stem}_no_sub.mp4"; events = mp.Queue()
         payload = {"input_path": asset["path"], "output_path": str(output), "inpaint_mode": job["inpaint_mode"], "subtitle_areas": json.loads(job["subtitle_areas"])}
         db.update_job(job["id"], status="running", stage="starting", started_at=now(), progress=0)
+        log_event(20, "local_job_started", job_id=job["id"])
         with self.lock:
             self.current_id = job["id"]; self.process = mp.Process(target=run_vsr, args=(payload, events), daemon=True); self.process.start()
         while self.process.is_alive(): self._drain(job["id"], events); self.process.join(.25)
@@ -63,10 +65,14 @@ class JobQueue:
                 try:
                     output_asset_id = self._save_output_asset(job["id"], output)
                     db.update_job(job["id"], status="succeeded", stage="completed", progress=100, completed_at=now(), message="Completed.", output_asset_id=output_asset_id)
+                    log_event(20, "local_job_completed", job_id=job["id"])
                 except Exception as exc:
                     db.append_log(job["id"], now(), "error", f"Could not save output asset: {exc}")
                     db.update_job(job["id"], status="failed", stage="failed", completed_at=now(), error_code="VSR_OUTPUT_INVALID", message="VSR output could not be validated or saved.")
-            else: db.update_job(job["id"], status="failed", stage="failed", completed_at=now(), error_code="VSR_PROCESS_FAILED", message="Subtitle cleanup failed; see task logs.")
+                    log_event(40, "local_job_output_invalid", job_id=job["id"], error=exc)
+            else:
+                db.update_job(job["id"], status="failed", stage="failed", completed_at=now(), error_code="VSR_PROCESS_FAILED", message="Subtitle cleanup failed; see task logs.")
+                log_event(40, "local_job_process_failed", job_id=job["id"])
         with self.lock: self.current_id = self.process = None
     def _drain(self, job_id, events):
         while True:
@@ -74,7 +80,9 @@ class JobQueue:
             except queue.Empty: return
             if event[0] == "log": db.append_log(job_id, now(), event[1], event[2])
             elif event[0] == "progress": db.update_job(job_id, progress=round(float(event[1]), 2), stage=event[2], message=f"Processing: {float(event[1]):.0f}%")
-            elif event[0] == "error": db.append_log(job_id, now(), "error", event[1]); db.append_log(job_id, now(), "debug", event[2])
+            elif event[0] == "error":
+                db.append_log(job_id, now(), "error", event[1]); db.append_log(job_id, now(), "debug", event[2])
+                log_event(40, "local_job_runner_error", job_id=job_id, error=event[1], traceback=event[2])
 
     def _save_output_asset(self, job_id: str, output: Path) -> str:
         from .storage import asset_path

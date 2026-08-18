@@ -32,11 +32,15 @@ SERVER_HOST = str(os.getenv("VSR_API_HOST", RAW_CONFIG["server"]["host"]))
 SERVER_PORT = int(os.getenv("VSR_API_PORT", str(RAW_CONFIG["server"]["port"])))
 DATA_ROOT = Path(os.getenv("VSR_API_DATA_ROOT", str(RAW_CONFIG["storage"]["data_root"]))).resolve()
 ASSETS_ROOT, JOBS_ROOT, DB_PATH = DATA_ROOT / "assets", DATA_ROOT / "jobs", DATA_ROOT / "app.db"
+LOGS_ROOT = DATA_ROOT / "logs"
+LOG_MAX_BYTES = int(os.getenv("VSR_API_LOG_MAX_BYTES", "10485760"))
+LOG_BACKUP_COUNT = int(os.getenv("VSR_API_LOG_BACKUP_COUNT", "7"))
 
 
 def ensure_data_dirs() -> None:
     ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
     JOBS_ROOT.mkdir(parents=True, exist_ok=True)
+    LOGS_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 def write_default_config() -> None:

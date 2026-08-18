@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import cv2
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from backend.tools.constant import InpaintMode
@@ -15,6 +15,7 @@ from .config import ensure_data_dirs
 from .job_queue import job_queue
 from .schemas import JobCreate
 from .storage import persist_upload, remove_asset
+from .service_logging import configure_api_logging, log_event, log_exception
 
 
 def now() -> str: return datetime.now(timezone.utc).isoformat()
@@ -22,9 +23,28 @@ app = FastAPI(title="Subtitle Cleanup Service", version="1.0.0")
 
 
 @app.on_event("startup")
-def startup(): ensure_data_dirs(); db.init_db(); job_queue.start()
+def startup():
+    ensure_data_dirs(); configure_api_logging(); db.init_db(); job_queue.start(); log_event(20, "api_started")
 @app.on_event("shutdown")
-def shutdown(): job_queue.stop()
+def shutdown():
+    log_event(20, "api_stopping"); job_queue.stop()
+
+
+@app.middleware("http")
+async def log_request_failures(request: Request, call_next):
+    path = request.url.path
+    parts = path.split("/")
+    job_id = parts[4] if len(parts) > 4 and parts[:4] == ["", "api", "v1", "jobs"] else None
+    try:
+        response = await call_next(request)
+    except Exception:
+        log_exception("request_unhandled_exception", job_id=job_id, method=request.method, path=path)
+        raise
+    if response.status_code >= 500:
+        log_event(40, "request_server_error", job_id=job_id, method=request.method, path=path, status=response.status_code)
+    elif response.status_code >= 400:
+        log_event(30, "request_client_error", job_id=job_id, method=request.method, path=path, status=response.status_code)
+    return response
 
 
 @app.get("/health")
