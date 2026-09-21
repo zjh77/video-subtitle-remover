@@ -6,8 +6,10 @@ import threading
 import cv2
 import numpy as np
 
-from .ffmpeg_cli import FFmpegCLI
-
+try:
+    import av
+except ImportError:  # pragma: no cover - reported at runtime with installation guidance
+    av = None
 
 class FramePrefetcher:
     """
@@ -57,7 +59,21 @@ class FFmpegVideoWriter:
     接口兼容 cv2.VideoWriter（write/release）。
     """
 
-    def __init__(self, output_path, fps, size):
+    def __init__(self, output_path, fps, size, input_path=None):
+        """Encode frames in presentation order.
+
+        When ``input_path`` is supplied, PyAV supplies the source frame PTS for
+        every write.  Rawvideo pipes cannot carry those timestamps, so the old
+        FFmpeg implementation silently converted VFR sources to CFR.
+        """
+        if input_path is not None:
+            if av is None:
+                raise RuntimeError("PyAV is required to preserve input video timestamps.")
+            self._init_timestamp_preserving_writer(output_path, size, input_path)
+            return
+
+        self._av_output = None
+        from .ffmpeg_cli import FFmpegCLI
         w, h = size
         cmd = [
             FFmpegCLI.instance().ffmpeg_path,
@@ -82,10 +98,38 @@ class FFmpegVideoWriter:
             stderr=subprocess.DEVNULL,
         )
 
+    def _init_timestamp_preserving_writer(self, output_path, size, input_path):
+        self._process = None
+        self._input_container = av.open(input_path)
+        self._input_stream = self._input_container.streams.video[0]
+        self._input_frames = self._input_container.decode(self._input_stream)
+        self._av_output = av.open(output_path, mode='w')
+        w, h = size
+        self._output_stream = self._av_output.add_stream('libx264')
+        self._output_stream.width = w
+        self._output_stream.height = h
+        self._output_stream.pix_fmt = 'yuv420p'
+        # Keep the source clock rather than deriving a new CFR clock from FPS.
+        self._output_stream.time_base = self._input_stream.time_base
+        self._output_stream.codec_context.time_base = self._input_stream.time_base
+        self._written_frames = 0
+
     def write(self, frame):
         """写入一帧（numpy BGR 数组）。"""
         if frame.dtype != np.uint8:
             frame = np.clip(frame, 0, 255).astype(np.uint8)
+        if self._av_output is not None:
+            try:
+                source_frame = next(self._input_frames)
+            except StopIteration as exc:
+                raise RuntimeError("VSR attempted to write more frames than were decoded from the input.") from exc
+            encoded = av.VideoFrame.from_ndarray(frame, format='bgr24')
+            encoded.pts = source_frame.pts
+            encoded.time_base = source_frame.time_base
+            for packet in self._output_stream.encode(encoded):
+                self._av_output.mux(packet)
+            self._written_frames += 1
+            return
         try:
             self._process.stdin.write(frame.tobytes())
         except BrokenPipeError:
@@ -93,6 +137,21 @@ class FFmpegVideoWriter:
 
     def release(self):
         """关闭管道并等待编码完成。"""
+        if self._av_output is not None:
+            try:
+                try:
+                    next(self._input_frames)
+                except StopIteration:
+                    pass
+                else:
+                    raise RuntimeError("VSR wrote fewer frames than were decoded from the input.")
+                for packet in self._output_stream.encode():
+                    self._av_output.mux(packet)
+            finally:
+                self._av_output.close()
+                self._input_container.close()
+                self._av_output = None
+            return
         try:
             self._process.stdin.close()
         except BrokenPipeError:

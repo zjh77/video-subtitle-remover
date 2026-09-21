@@ -62,10 +62,10 @@ class SubtitleRemover:
         # 创建视频临时对象，windows下delete=True会有permission denied的报错
         self.video_temp_file = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
         # 创建视频写对象（使用 FFmpeg libx264 编码，比 mp4v 质量更好、文件更小）
-        try:
-            self.video_writer = FFmpegVideoWriter(get_readable_path(self.video_temp_file.name), self.fps, self.size)
-        except Exception:
-            self.video_writer = cv2.VideoWriter(get_readable_path(self.video_temp_file.name), cv2.VideoWriter_fourcc(*'mp4v'), self.fps, self.size)
+        self.video_writer = FFmpegVideoWriter(
+            get_readable_path(self.video_temp_file.name), self.fps, self.size,
+            get_readable_path(vd_path),
+        )
         self.video_out_path = os.path.abspath(os.path.join(os.path.dirname(self.video_path), f'{self.vd_name}_no_sub.mp4'))
         self.propainter_inpaint = None
         self.ext = os.path.splitext(vd_path)[-1]
@@ -386,7 +386,9 @@ class SubtitleRemover:
                 raise Exception(f'inpaint mode: {config.inpaintMode.value} not implemented')
 
         self.video_cap.release()
-        self.video_writer.release()
+        # STTN_AUTO owns and closes the shared writer.  Other modes close it here.
+        if config.inpaintMode.value != InpaintMode.STTN_AUTO:
+            self.video_writer.release()
         if not self.is_picture:
             # 将原音频合并到新生成的视频文件中
             self.merge_audio_to_video()
