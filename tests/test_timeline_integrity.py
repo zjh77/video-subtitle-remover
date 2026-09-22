@@ -53,6 +53,17 @@ class TimelineIntegrityTests(unittest.TestCase):
 
         validate_timeline(source, result, [{"xmin": 0, "xmax": 64, "ymin": 56, "ymax": 64}])
 
+    def test_picture_fingerprint_allows_compression_noise_but_not_a_scene_swap(self):
+        from vsr_api.app.timeline_integrity import _same_picture
+
+        rng = np.random.default_rng(42)
+        source = rng.integers(0, 256, size=1024).astype(np.float32)
+        reencoded = np.clip(source + rng.normal(0, 7, size=source.shape), 0, 255)
+        different_scene = rng.integers(0, 256, size=1024).astype(np.float32)
+
+        self.assertTrue(_same_picture(source, reencoded))
+        self.assertFalse(_same_picture(source, different_scene))
+
 
 if __name__ == "__main__":
     unittest.main()

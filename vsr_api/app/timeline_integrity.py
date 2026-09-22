@@ -28,6 +28,22 @@ def _outside_subtitles(frame: np.ndarray, subtitle_areas: Iterable[dict[str, int
     return sample[allowed[::16, ::16]].astype(np.float32)
 
 
+def _same_picture(before: np.ndarray, after: np.ndarray) -> bool:
+    """Allow ordinary lossy-encoding noise without accepting another scene."""
+    if before.size != after.size or not before.size:
+        return False
+    difference = float(np.mean(np.abs(before - after)))
+    before_std, after_std = float(np.std(before)), float(np.std(after))
+    # Flat frames have no meaningful correlation coefficient.
+    if before_std < 2 or after_std < 2:
+        return difference <= 12
+    correlation = float(np.corrcoef(before, after)[0, 1])
+    # Re-encoding a moving or high-detail frame can exceed a fixed per-pixel
+    # error budget, while its spatial structure remains nearly identical.
+    # A frame from another scene does not retain this correlation.
+    return correlation >= 0.985 or (correlation >= 0.96 and difference <= 20)
+
+
 def validate_timeline(input_path: Path, output_path: Path, subtitle_areas: Iterable[dict[str, int]]) -> None:
     """Verify ordered frames, presentation timestamps, and untouched pixels.
 
@@ -59,9 +75,7 @@ def validate_timeline(input_path: Path, output_path: Path, subtitle_areas: Itera
                 )
             before_pixels = _outside_subtitles(before.to_ndarray(format="bgr24"), subtitle_areas)
             after_pixels = _outside_subtitles(after.to_ndarray(format="bgr24"), subtitle_areas)
-            # CRF encoding may alter a few values.  A scene from another point in
-            # the timeline is many orders of magnitude farther away than this.
-            if before_pixels.size != after_pixels.size or np.mean(np.abs(before_pixels - after_pixels)) > 8:
+            if not _same_picture(before_pixels, after_pixels):
                 raise RuntimeError(f"timeline picture mismatch outside subtitle area at frame {index}")
             index += 1
     finally:
