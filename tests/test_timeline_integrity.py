@@ -12,6 +12,29 @@ import numpy as np
 HAS_AV = importlib.util.find_spec("av") is not None
 
 
+class PictureComparisonTests(unittest.TestCase):
+    def test_near_white_and_dark_frames_tolerate_small_encoding_noise(self):
+        from vsr_api.app.timeline_integrity import _same_picture
+
+        rng = np.random.default_rng(1300)
+        for brightness in (8, 247):
+            source = np.clip(brightness + rng.normal(0, 2.5, 8192), 0, 255)
+            encoded = np.clip(source - 1 + rng.normal(0, 0.8, source.size), 0, 255)
+            # Reproduce the old rejection on a low-contrast flash frame.
+            self.assertLess(np.corrcoef(source, encoded)[0, 1], 0.96)
+            self.assertTrue(_same_picture(source, encoded))
+
+    def test_flat_frame_replacement_and_brightness_change_are_rejected(self):
+        from vsr_api.app.timeline_integrity import _same_picture
+
+        white = np.full(8192, 247.0)
+        self.assertFalse(_same_picture(white, np.zeros(8192)))
+        self.assertFalse(_same_picture(white, white - 10))
+        textured = np.tile([225.0, 255.0], 4096)
+        self.assertFalse(_same_picture(white, textured))
+        self.assertFalse(_same_picture(textured, white))
+
+
 @unittest.skipUnless(HAS_AV, "PyAV is installed with the VSR runtime dependencies")
 class TimelineIntegrityTests(unittest.TestCase):
     def setUp(self):

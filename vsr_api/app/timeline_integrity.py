@@ -34,9 +34,14 @@ def _same_picture(before: np.ndarray, after: np.ndarray) -> bool:
         return False
     difference = float(np.mean(np.abs(before - after)))
     before_std, after_std = float(np.std(before)), float(np.std(after))
-    # Flat frames have no meaningful correlation coefficient.
-    if before_std < 2 or after_std < 2:
-        return difference <= 12
+    # Correlation is unstable on near-uniform frames (e.g. a white flash):
+    # sub-level encoding noise can dominate their very small variance.
+    # Require BOTH frames to be low contrast and bound absolute errors, so
+    # replacing a textured frame or changing a flat frame's brightness fails.
+    if max(before_std, after_std) < 5:
+        return difference <= 2 and float(np.percentile(np.abs(before - after), 99)) <= 8
+    if min(before_std, after_std) < 2:
+        return False
     correlation = float(np.corrcoef(before, after)[0, 1])
     # Re-encoding a moving or high-detail frame can exceed a fixed per-pixel
     # error budget, while its spatial structure remains nearly identical.
