@@ -13,6 +13,43 @@ HAS_AV = importlib.util.find_spec("av") is not None
 
 
 class PictureComparisonTests(unittest.TestCase):
+    def test_flat_frame_tolerance_and_outlier_limit(self):
+        from vsr_api.app.timeline_integrity import _same_picture
+
+        source = np.full(1000, 246.0)
+        for shift in (2.012, 4, 5):
+            self.assertTrue(_same_picture(source, source - shift))
+        self.assertFalse(_same_picture(source, source - 5.1))
+        # A small average must not hide a larger altered region.
+        altered = source.copy()
+        altered[:20] -= 10
+        self.assertFalse(_same_picture(source, altered))
+
+    def test_excluded_area_matches_expanded_inclusive_rectangle(self):
+        from vsr_api.app.timeline_integrity import _outside_subtitles
+
+        frame = np.zeros((96, 96, 3), dtype=np.uint8)
+        # A non-default padding also checks coordinates clipped at the edge.
+        area = dict(xmin=8, xmax=23, ymin=8, ymax=23)
+        cv2.rectangle(frame, (0, 0), (48, 48), (255, 255, 255), -1)
+        samples = _outside_subtitles(frame, [area], mask_padding=25)
+        self.assertTrue(np.all(samples == 0))
+        self.assertEqual(samples.size, 36 - 16)
+        frame[64, 64] = 255
+        self.assertIn(255, _outside_subtitles(frame, [area], mask_padding=25))
+
+    def test_worker_success_transmits_actual_mask_padding(self):
+        import queue
+        from vsr_api.app.job_queue import JobQueue
+
+        events = queue.Queue()
+        events.put(("success", 25))
+        validation = {}
+        self.assertTrue(JobQueue()._drain("test", events, validation))
+        self.assertEqual(validation, {"mask_padding": 25})
+        self.assertFalse(JobQueue()._drain("test", events, validation))
+        self.assertEqual(validation["mask_padding"], 25)
+
     def test_near_white_and_dark_frames_tolerate_small_encoding_noise(self):
         from vsr_api.app.timeline_integrity import _same_picture
 

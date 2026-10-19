@@ -57,16 +57,17 @@ class JobQueue:
         with self.lock:
             self.current_id = job["id"]; self.process = mp.Process(target=run_vsr, args=(payload, events), daemon=True); self.process.start()
         succeeded = False
+        validation = {}
         while self.process.is_alive():
-            succeeded = self._drain(job["id"], events) or succeeded
+            succeeded = self._drain(job["id"], events, validation) or succeeded
             self.process.join(.25)
-        succeeded = self._drain(job["id"], events) or succeeded
+        succeeded = self._drain(job["id"], events, validation) or succeeded
         current = db.get_job(job["id"])
         if current["status"] == "cancelling": db.update_job(job["id"], status="cancelled", stage="cancelled", completed_at=now()); db.append_log(job["id"], now(), "info", "Task cancelled.")
         elif current["status"] == "running":
             if self.process.exitcode == 0 and succeeded and output.exists():
                 try:
-                    output_asset_id = self._save_output_asset(job["id"], output, Path(asset["path"]), json.loads(job["subtitle_areas"]))
+                    output_asset_id = self._save_output_asset(job["id"], output, Path(asset["path"]), json.loads(job["subtitle_areas"]), validation.get("mask_padding", 0))
                     db.update_job(job["id"], status="succeeded", stage="completed", progress=100, completed_at=now(), message="Completed.", output_asset_id=output_asset_id)
                     log_event(20, "local_job_completed", job_id=job["id"])
                 except Exception as exc:
@@ -77,7 +78,7 @@ class JobQueue:
                 db.update_job(job["id"], status="failed", stage="failed", completed_at=now(), error_code="VSR_PROCESS_FAILED", message="Subtitle cleanup did not complete successfully; see task logs.")
                 log_event(40, "local_job_process_failed", job_id=job["id"])
         with self.lock: self.current_id = self.process = None
-    def _drain(self, job_id, events):
+    def _drain(self, job_id, events, validation=None):
         succeeded = False
         while True:
             try: event = events.get_nowait()
@@ -89,11 +90,13 @@ class JobQueue:
                 log_event(40, "local_job_runner_error", job_id=job_id, error=event[1], traceback=event[2])
             elif event[0] == "success":
                 succeeded = True
+                if validation is not None and len(event) > 1:
+                    validation["mask_padding"] = max(0, int(event[1]))
 
-    def _save_output_asset(self, job_id: str, output: Path, source: Path, subtitle_areas: list[dict]) -> str:
+    def _save_output_asset(self, job_id: str, output: Path, source: Path, subtitle_areas: list[dict], mask_padding: int = 0) -> str:
         from .storage import asset_path
         from .timeline_integrity import validate_timeline
-        validate_timeline(source, output, subtitle_areas)
+        validate_timeline(source, output, subtitle_areas, mask_padding)
         cap = cv2.VideoCapture(str(output))
         try:
             width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

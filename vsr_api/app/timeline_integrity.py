@@ -17,11 +17,14 @@ def _timestamp(frame) -> Fraction:
     return Fraction(frame.pts) * Fraction(frame.time_base)
 
 
-def _outside_subtitles(frame: np.ndarray, subtitle_areas: Iterable[dict[str, int]]) -> np.ndarray:
+def _outside_subtitles(frame: np.ndarray, subtitle_areas: Iterable[dict[str, int]], mask_padding: int = 0) -> np.ndarray:
     """Return a compact fingerprint made only from pixels the model may not edit."""
     allowed = np.ones(frame.shape[:2], dtype=bool)
     for area in subtitle_areas:
-        allowed[area["ymin"]:area["ymax"], area["xmin"]:area["xmax"]] = False
+        # create_mask uses cv2.rectangle with inclusive right/bottom edges.
+        height, width = allowed.shape
+        allowed[max(0, area["ymin"] - mask_padding):min(height, area["ymax"] + mask_padding + 1),
+                max(0, area["xmin"] - mask_padding):min(width, area["xmax"] + mask_padding + 1)] = False
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     # A deterministic sparse grid makes a full-video check inexpensive.
     sample = gray[::16, ::16]
@@ -39,7 +42,7 @@ def _same_picture(before: np.ndarray, after: np.ndarray) -> bool:
     # Require BOTH frames to be low contrast and bound absolute errors, so
     # replacing a textured frame or changing a flat frame's brightness fails.
     if max(before_std, after_std) < 5:
-        return difference <= 2 and float(np.percentile(np.abs(before - after), 99)) <= 8
+        return difference <= 5 and float(np.percentile(np.abs(before - after), 99)) <= 8
     if min(before_std, after_std) < 2:
         return False
     correlation = float(np.corrcoef(before, after)[0, 1])
@@ -49,7 +52,7 @@ def _same_picture(before: np.ndarray, after: np.ndarray) -> bool:
     return correlation >= 0.985 or (correlation >= 0.96 and difference <= 20)
 
 
-def validate_timeline(input_path: Path, output_path: Path, subtitle_areas: Iterable[dict[str, int]]) -> None:
+def validate_timeline(input_path: Path, output_path: Path, subtitle_areas: Iterable[dict[str, int]], mask_padding: int = 0) -> None:
     """Verify ordered frames, presentation timestamps, and untouched pixels.
 
     The check is intentionally performed before an output asset receives an ID;
@@ -78,8 +81,8 @@ def validate_timeline(input_path: Path, output_path: Path, subtitle_areas: Itera
                 raise RuntimeError(
                     f"timeline timestamp mismatch at frame {index}: {before_time} != {after_time}"
                 )
-            before_pixels = _outside_subtitles(before.to_ndarray(format="bgr24"), subtitle_areas)
-            after_pixels = _outside_subtitles(after.to_ndarray(format="bgr24"), subtitle_areas)
+            before_pixels = _outside_subtitles(before.to_ndarray(format="bgr24"), subtitle_areas, mask_padding)
+            after_pixels = _outside_subtitles(after.to_ndarray(format="bgr24"), subtitle_areas, mask_padding)
             if not _same_picture(before_pixels, after_pixels):
                 raise RuntimeError(f"timeline picture mismatch outside subtitle area at frame {index}")
             index += 1

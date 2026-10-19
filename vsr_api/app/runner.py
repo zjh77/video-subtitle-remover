@@ -28,6 +28,8 @@ def run_vsr(payload: dict[str, Any], events) -> None:
         events.put(("log", "info", f"Starting VSR with {payload['inpaint_mode']}."))
         remover.run()
         if not output.exists(): raise RuntimeError("VSR completed without producing an output video.")
-        events.put(("success",))
+        # Send the actual child-process setting, not a hard-coded default or
+        # the API parent's potentially different configuration.
+        events.put(("success", int(config.subtitleAreaDeviationPixel.value)))
     except Exception as exc:
         events.put(("error", f"{type(exc).__name__}: {exc}", traceback.format_exc()))
